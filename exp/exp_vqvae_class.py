@@ -190,7 +190,7 @@ class TeeLogger:
                 f.flush()
 
 
-class Exp_Classification(Exp_Basic):
+class Exp_VQ_VAE_Classification(Exp_Basic):
     """
     V2-fixed:
       - optimizer param groups (decay/no_decay)
@@ -260,7 +260,7 @@ class Exp_Classification(Exp_Basic):
         # stage1
         p["stage1_log"] = os.path.join(self.run_root, "stage1", "logs", f"{setting}.log")
         p["stage1_ckpt_dir"] = os.path.join(self.run_root, "stage1", "ckpts", setting)
-        p["stage1_wrapper"] = os.path.join(p["stage1_ckpt_dir"], "best_wrapper_student_checkoutpoint.pth")
+        p["stage1_wrapper"] = os.path.join(p["stage1_ckpt_dir"], "best_wrapper.pth")
         p["stage1_results_dir"] = os.path.join(self.run_root, "stage1", "results", setting)
 
         # stage2
@@ -364,9 +364,9 @@ class Exp_Classification(Exp_Basic):
             self.args.enc_in = int(self.args.ds_cfg.get("channel_num", self.args.enc_in))
             self.args.num_class = int(self.args.ds_cfg.get("num_labels", getattr(self.args, "num_class", 12)))
 
-        model = self.model_dict[self.args.model].Model(self.args).float()
-        if self.args.use_multi_gpu and self.args.use_gpu:
-            model = nn.DataParallel(model, device_ids=self.args.device_ids)
+        model = self.model_dict[self.args.model].IMU_VQ_Model(self.args).float()
+
+
         return model
 
     def _get_data(self, flag):
@@ -376,7 +376,7 @@ class Exp_Classification(Exp_Basic):
         # save_root = os.path.join(getattr(self.args, "pretrain_checkpoints", "./pretrain_ckpts"), setting)
         save_root = os.path.join(self.run_root, "stage1", "ckpts", setting)
 
-        wrapper_path = os.path.join(save_root, "best_wrapper_student_checkoutpoint.pth")
+        wrapper_path = os.path.join(save_root, "best_wrapper.pth")
         hf_dir = os.path.join(save_root, "best_hf")  # 你 save_hf_bundle(tag="best") 就是这个
 
         has_wrapper = os.path.isfile(wrapper_path)
@@ -565,7 +565,7 @@ class Exp_Classification(Exp_Basic):
         loss_mse = out[0]
         if not torch.is_tensor(loss_mse) or loss_mse.dim() != 0:
             raise RuntimeError(f"loss_mse must be scalar tensor, got {type(loss_mse)} shape={getattr(loss_mse,'shape',None)}")
-        return loss_mse
+        return out
 
     def log(self, msg: str):
         if self.logger is not None:
@@ -701,7 +701,9 @@ class Exp_Classification(Exp_Basic):
             for batch_x, _, padding_mask in loader:
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = self._to_bool_mask(padding_mask)
-                loss_mse = self._forward_pretrain_loss(batch_x, padding_mask)
+                out = self._forward_pretrain_loss(batch_x, padding_mask)
+                loss_mse = out[0]
+
                 losses.append(float(loss_mse.item()))
         self.model.train()
         return float(np.mean(losses)) if len(losses) else 0.0
@@ -733,19 +735,6 @@ class Exp_Classification(Exp_Basic):
     def pretrain(self, setting):
         if not self._is_two_stage_model():
             raise RuntimeError("pretrain called, but model is not two-stage.")
-
-
-        # =========================
-        # ✅ 动态触发监控器
-        # =========================
-        kd_enabled = False
-        best_val_mse = float('inf')
-        plateau_count = 0
-        # 连续 2 个 epoch val_mse 下降比例小于 1%，则认为特征已稳定
-        improvement_threshold = 0.01
-        patience = 2
-
-
 
         _, train_loader = self._get_data(flag="TRAIN")
         _, val_loader = self._get_data(flag="TEST")
@@ -788,57 +777,6 @@ class Exp_Classification(Exp_Basic):
         report_trainable_params(self.model)
         self._log_lrs(opt, "[LR] init")
 
-        # =========================
-        # ✅ helper: collect embeddings for KMeans (defined ONCE)
-        # =========================
-        @torch.no_grad()
-        def collect_embeddings(model, loader, device,
-                               max_batches=200, max_points=200000, per_batch_cap=4096):
-            model.eval()
-            zs, n_points = [], 0
-            for bi, (batch_x, _, _) in enumerate(loader):
-                if bi >= max_batches:
-                    break
-                batch_x = batch_x.float().to(device)
-
-                if hasattr(model, "_align_seq_len"):
-                    batch_x = model._align_seq_len(batch_x)
-
-                norm_eps = float(getattr(model, "norm_eps", 1e-5))
-                mu = batch_x.mean(dim=1, keepdim=True)
-                sigma = batch_x.std(dim=1, keepdim=True).clamp_min(norm_eps)
-                x_norm = (batch_x - mu) / sigma
-
-                # IMPORTANT: use unmasked embeddings
-                _, z_prepos = model.patch_embed(x_norm, patch_mask=None, return_pre_pos=True)  # [B,P,D]
-                z = z_prepos
-                z = z.reshape(-1, z.shape[-1])  # [B*P,D]
-
-                if z.shape[0] > per_batch_cap:
-                    idx = torch.randperm(z.shape[0], device=z.device)[:per_batch_cap]
-                    z = z[idx]
-
-                z_np = z.detach().float().cpu().numpy()
-                zs.append(z_np)
-                n_points += z_np.shape[0]
-                if n_points >= max_points:
-                    break
-
-            X = np.concatenate(zs, axis=0) if len(zs) else None
-            if X is None or X.shape[0] == 0:
-                raise RuntimeError("collect_embeddings got empty X. Check dataloader / batch shapes.")
-            if X.shape[0] > max_points:
-                X = X[np.random.permutation(X.shape[0])[:max_points]]
-            return X
-
-        # =========================
-        # ✅ enable KD ONCE flag
-        # =========================
-        kd_enabled = False
-
-        # 你可以用这个参数控制：第几个 epoch 后开始建 centers 并 enable_kd
-        # 推荐：>=1 或 >=warmup_epochs（你自己调）
-        kmeans_trigger_epoch = int(getattr(self.args, "kmeans_trigger_epoch", 1))  # 1 表示第1个epoch结束后就触发
 
         for epoch in range(self.args.train_epochs):
             self.model.train()
@@ -849,7 +787,9 @@ class Exp_Classification(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = self._to_bool_mask(padding_mask)
 
-                loss_mse = self._forward_pretrain_loss(batch_x, padding_mask)
+                out = self._forward_pretrain_loss(batch_x, padding_mask)
+                loss_mse = out[0]
+                val_perplexity = out[-1]["perplexity"]
                 loss_mse.backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
                 opt.step()
@@ -880,11 +820,12 @@ class Exp_Classification(Exp_Basic):
             # ----------------------------
             # save best wrapper
             # ----------------------------
-            if best_val is None or val_mse < best_val:
+            # if best_val is None or val_mse < best_val:
+            if best_val is None or (val_mse < best_val and val_perplexity > 10.0):
                 best_val = val_mse
 
                 m = _unwrap(self.model)
-                wrapper_path = os.path.join(save_root, "best_wrapper_student_checkoutpoint.pth")
+                wrapper_path = os.path.join(save_root, "best_wrapper.pth")
                 wrapper_path = to_secure_path(wrapper_path)  # 处理
 
                 if hasattr(m, "save_wrapper"):
@@ -892,6 +833,78 @@ class Exp_Classification(Exp_Basic):
                 else:
                     torch.save(m.state_dict(), wrapper_path)
                 self.log(f"[save] wrapper = {wrapper_path}")
+
+                # -------------------------------------------------------
+                # 2. 【新增】单独保存 Codebook（用于论文可视化/分析）
+                # -------------------------------------------------------
+                # 假设你的 vqvae 结构是 self.model.vqvae.quantizer
+                # 根据你的代码 vqvae.py，quantizer 可能是 List (分部位) 或 单个对象
+
+                codebook_save_path = os.path.join(save_root, "best_codebook.pth")
+                codebook_save_path = to_secure_path(codebook_save_path)  # 处理
+
+                # 定义一个辅助函数，通吃各种量化器的实现方式
+                def get_codebook_tensor(quantizer_module):
+                    # 1. 优先检查 codebook (QuantizeEMAReset, QuantizeEMA, QuantizeReset)
+                    if hasattr(quantizer_module, 'codebook'):
+                        return quantizer_module.codebook.data.cpu()
+                    # 2. 检查标准 embedding (Quantizer)
+                    if hasattr(quantizer_module, 'embedding'):
+                        return quantizer_module.embedding.weight.data.cpu()
+                    # 3. 检查旧版实现 _w
+                    if hasattr(quantizer_module, '_w'):
+                        return quantizer_module._w.data.cpu()
+                    return None
+
+                try:
+                    codebook_data = None
+
+                    # 情况 A: 分部位 VQVAE (ModuleList: quantizers)
+                    if hasattr(m, 'quantizers'):
+                        self.log("[Checkpoint] Detected Multi-Part VQVAE (quantizers list).")
+                        codebooks_dict = {}
+                        for i, q in enumerate(m.quantizers):
+                            cb = get_codebook_tensor(q)
+                            if cb is not None:
+                                codebooks_dict[f'part_{i}'] = cb
+                            else:
+                                self.log(f"[Warning] Could not find codebook weights for part {i}")
+
+                        if codebooks_dict:
+                            codebook_data = codebooks_dict
+
+                    # 情况 B: 单一 VQVAE (Module: quantizer) -> 你目前是这个
+                    elif hasattr(m, 'quantizer'):
+                        self.log("[Checkpoint] Detected Vanilla VQVAE (single quantizer).")
+                        q = m.quantizer
+                        cb = get_codebook_tensor(q)
+
+                        if cb is not None:
+                            codebook_data = cb
+                        else:
+                            self.log(
+                                "[Warning] Quantizer exists but codebook tensor not found (checked 'codebook', 'embedding', '_w')")
+
+                    # 执行保存
+                    if codebook_data is not None:
+                        torch.save(codebook_data, codebook_save_path)
+                        self.log(f"[Save] Codebook successfully saved to: {codebook_save_path}")
+                        # 顺便打印一下形状，让你放心
+                        if isinstance(codebook_data, dict):
+                            shapes = {k: v.shape for k, v in codebook_data.items()}
+                            self.log(f"[Debug] Codebook shapes: {shapes}")
+                        else:
+                            self.log(f"[Debug] Codebook shape: {codebook_data.shape}")
+                    else:
+                        self.log(
+                            f"[Error] FAILED to extract codebook! Structure of m: {dir(m) if hasattr(m, 'vqvae') else 'No vqvae'}")
+
+                except Exception as e:
+                    self.log(f"[Error] Exception during codebook saving: {str(e)}")
+
+
+                self.log(f"[save] wrapper = {wrapper_path}")
+                self.log(f"[save] codebook extracted = {codebook_save_path}")
 
                 status_path = os.path.join(paths["meta_dir"], "status_stage1.json")
                 status_path = to_secure_path(status_path)  # 处理
@@ -901,108 +914,12 @@ class Exp_Classification(Exp_Basic):
                         "best_val": float(best_val),
                         "best_epoch": int(epoch + 1),
                         "artifact_path": paths["stage1_wrapper"],
-                        "wrapper_path":wrapper_path,
+                        "wrapper_path": wrapper_path,
+                        "codebook_save_path": codebook_save_path,
                         "artifact_exists": os.path.exists(paths["stage1_wrapper"]),
                         "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     }, f, ensure_ascii=False, indent=2)
 
-            # ==========================================================
-            # ✅ (Optional) build KMeans centers ONCE + enable KD + rebuild opt/scheduler
-            # ==========================================================
-
-                    # ==========================================================
-                    # ✅ 自动判定特征是否稳定，稳定后触发 KMeans + KD
-                    # ==========================================================
-                    is_plateau = False
-                    if not kd_enabled:
-                        if best_val is not None:
-                            improvement = (best_val_mse - val_mse) / (best_val_mse + 1e-9)
-                            if improvement < improvement_threshold:
-                                plateau_count += 1
-                            else:
-                                plateau_count = 0  # 还在显著下降，清零计数
-
-                            if plateau_count >= patience:
-                                is_plateau = True
-
-                        best_val_mse = min(best_val_mse, val_mse)
-
-                    # 触发条件：达到平台期 OR 达到强制最大的预热 epoch (比如 10)
-                    max_warmup = int(getattr(self.args, "max_warmup_epochs", 5))
-                    force_trigger = (epoch + 1) >= max_warmup
-                    if (not kd_enabled) and int(getattr(self.args, "build_kmeans_centers", 1)) and (is_plateau or force_trigger):
-                        K = int(getattr(self.args, "primitive_K", 32))
-                        out_path = str(getattr(self.args, "kmeans_centers_out", "")).strip()
-                        if not out_path:
-                            out_path = os.path.join(paths["meta_dir"], f"kmeans_centers_K{K}.pt")
-
-                        # 1) 可选：用 best_wrapper 加载“最佳”表征来做聚类（你想这样就这样）
-                        #    如果你不想回滚训练轨迹，把下面这段注释掉即可（更“连续训练”）。
-                        m = _unwrap(self.model)
-                        # 0) save current training weights (and RNG state optional)
-                        sd_cur = copy.deepcopy(m.state_dict())
-
-                        # c = hasattr(m, "load_wrapper")
-                        # d = os.path.isfile(paths["stage1_wrapper"])
-                        if hasattr(m, "load_wrapper") and os.path.isfile(paths["stage1_wrapper"]):
-                            m.load_wrapper(paths["stage1_wrapper"], map_location=self.device)
-                            self.log(f"[KMeans] loaded best wrapper for clustering: {paths['stage1_wrapper']}")
-
-                        # 2) collect embeddings
-                        X = collect_embeddings(
-                            m, train_loader, self.device,
-                            max_batches=int(getattr(self.args, "kmeans_max_batches", 200)),
-                            max_points=int(getattr(self.args, "kmeans_max_points", 200000)),
-                            per_batch_cap=int(getattr(self.args, "kmeans_per_batch_cap", 4096))
-                        )
-                        self.log(f"[KMeans] collected X={X.shape}")
-
-                        km = MiniBatchKMeans(
-                            n_clusters=K,
-                            batch_size=int(getattr(self.args, "kmeans_batch_size", 4096)),
-                            n_init=int(getattr(self.args, "kmeans_n_init", 10)),
-                            max_iter=int(getattr(self.args, "kmeans_max_iter", 200)),
-                            verbose=1
-                        )
-                        km.fit(X)
-
-                        centers = torch.tensor(km.cluster_centers_, dtype=torch.float32)
-
-                        # 4) restore current training weights (IMPORTANT!)
-                        m.load_state_dict(sd_cur, strict=True)
-                        self.log("[KMeans] restored current training weights after clustering.")
-
-                        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                        torch.save(centers, out_path)
-                        self.log(f"[KMeans] saved centers: {out_path} shape={tuple(centers.shape)}")
-
-                        status_path = os.path.join(paths["meta_dir"], "status_kmeans.json")
-                        with open(status_path, "w", encoding="utf-8") as f:
-                            json.dump({
-                                "kmeans_centers_path": out_path,
-                                "kmeans_centers_exists": os.path.exists(out_path),
-                                "K": int(K),
-                                "D": int(centers.shape[1]),
-                                "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            }, f, ensure_ascii=False, indent=2)
-                        self.log(f"[save] kmeans status = {status_path}")
-
-                        # 3) ✅ inject centers + enable KD
-                        if not hasattr(m, "set_kmeans_centers"):
-                            raise RuntimeError("Your Model must implement set_kmeans_centers(centers).")
-                        if not hasattr(m, "enable_kd"):
-                            raise RuntimeError("Your Model must implement enable_kd().")
-
-                        m.set_kmeans_centers(centers)
-                        m.enable_kd()
-                        kd_enabled = True
-                        self.log("[KD] enabled. Rebuilding optimizer & scheduler to include missing_head params...")
-
-                        # 4) ✅ 关键：重建 optimizer + scheduler（方案A）
-                        opt = self._select_optimizer()
-                        scheduler = self._build_scheduler(opt, steps_per_epoch=len(train_loader))
-                        self._log_lrs(opt, "[LR] rebuilt_after_kd")
-                        report_trainable_params(self.model)
 
         return
 
@@ -1622,6 +1539,6 @@ if __name__ == '__main__':
         configs.distil,
         configs.des)
 
-    exp = Exp_Classification(configs)
+    exp = Exp_VQ_VAE_Classification(configs)
     exp.pretrain(setting)
     c = 'end'

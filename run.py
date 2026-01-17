@@ -7,6 +7,7 @@ from exp.exp_imputation import Exp_Imputation
 from exp.exp_short_term_forecasting import Exp_Short_Term_Forecast
 from exp.exp_anomaly_detection import Exp_Anomaly_Detection
 from exp.exp_classification import Exp_Classification
+from exp.exp_vqvae_class import Exp_VQ_VAE_Classification
 from exp.exp_zero_shot_forecasting import Exp_Zero_Shot_Forecast
 from utils.print_args import print_args
 import random
@@ -197,6 +198,8 @@ if __name__ == '__main__':
     parser.add_argument('--build_kmeans_centers', type=int, default=1, help='build_kmeans_centers')
     parser.add_argument('--kmeans_centers_path', type=str, default=r"D:\fuy\MyCode\SensorLLMLib_version2\runs\SensorLLMFuy_test_withllm_mae\motionsense\$RUN_ID\meta\classification_MotionSense_SensorLLMFuy_test_withllm_mae_MotionSense_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0\kmeans_centers_K32.pt", help='kmeans_centers_path')
     parser.add_argument('--teacher_mode', type=str, default="online", help='teacher_mode')
+    parser.add_argument('--loss_style', type=str, default="all", help='loss_style')
+    parser.add_argument('--vqvae_path', type=str, default="vqvae_path", help='vqvae_path')
 
 
 
@@ -204,7 +207,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    if args.model == "SensorLLMFuy" or args.model == "SensorLLMFuy_202512301643_backmodel_randommask" or args.model == "SensorLLMFuy_batch_20251231_163911" or args.model == "SensorLLMFuy_batch_20251231_164145" or args.model == "SensorLLMFuy_test" or args.model == "SensorLLMFuy_batch_20251231_164145_new" or args.model == "SensorLLMFuy_test_nollm_mae" or args.model == "SensorLLMFuy_test_nollm_contri" or args.model == "SensorLLMFuy_test_withllm_mae":
+    if args.model=="SensorLLMFuy_test_withllm_mae_vqvae" or args.model == "VQVAE" or args.model == "SensorLLMFuy" or args.model == "SensorLLMFuy_202512301643_backmodel_randommask" or args.model == "SensorLLMFuy_batch_20251231_163911" or args.model == "SensorLLMFuy_batch_20251231_164145" or args.model == "SensorLLMFuy_test" or args.model == "SensorLLMFuy_batch_20251231_164145_new" or args.model == "SensorLLMFuy_test_nollm_mae" or args.model == "SensorLLMFuy_test_nollm_contri" or args.model == "SensorLLMFuy_test_withllm_mae":
         args.two_stage = 1
     else:
         args.two_stage = 0
@@ -236,6 +239,8 @@ if __name__ == '__main__':
         Exp = Exp_Imputation
     elif args.task_name == 'anomaly_detection':
         Exp = Exp_Anomaly_Detection
+    elif args.task_name == 'vqvae':
+        Exp = Exp_VQ_VAE_Classification
     elif args.task_name == 'classification':
         Exp = Exp_Classification
     elif args.task_name == 'zero_shot_forecast':

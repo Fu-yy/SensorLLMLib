@@ -1,10 +1,82 @@
 import torch
-import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-
-
+import os
+import numpy as np
 from torch import Tensor
+from typing import Any, Dict, Optional, Tuple, List
+
+
+try:
+    import yaml
+except Exception:
+    yaml = None
+
+# optional: online LLM teacher
+try:
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+except Exception:
+    AutoTokenizer = None
+    AutoModelForCausalLM = None
+
+import torch
+import torch.nn.functional as F
+
+def _pad_to_multiple(x: torch.Tensor, multiple: int, pad_value: float = 0.0):
+    """
+    x: [B, L, C]
+    return: x_pad [B, L_pad, C], L_orig
+    """
+    B, L, C = x.shape
+    L_pad = ((L + multiple - 1) // multiple) * multiple
+    if L_pad == L:
+        return x, L
+    pad_len = L_pad - L
+    pad = x.new_full((B, pad_len, C), pad_value)
+    return torch.cat([x, pad], dim=1), L
+
+def _pad_mask_to_len(mask: torch.Tensor, L_pad: int):
+    """
+    mask: [B, L] (bool or 0/1), True/1 means valid
+    return: mask_pad [B, L_pad] bool
+    """
+    B, L = mask.shape
+    mask_bool = mask.bool()
+    if L == L_pad:
+        return mask_bool
+    pad_len = L_pad - L
+    pad = torch.zeros((B, pad_len), device=mask.device, dtype=torch.bool)
+    return torch.cat([mask_bool, pad], dim=1)
+
+def masked_mse(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor):
+    """
+    pred/target: [B, L, C]
+    mask: [B, L] bool (True = valid)
+    """
+    mask = mask.unsqueeze(-1)  # [B,L,1]
+    diff2 = (pred - target) ** 2
+    diff2 = diff2 * mask
+    denom = mask.sum() * pred.shape[-1]
+    return diff2.sum() / denom.clamp_min(1.0)
+
+def masked_l1(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor):
+    mask = mask.unsqueeze(-1)
+    diff = (pred - target).abs() * mask
+    denom = mask.sum() * pred.shape[-1]
+    return diff.sum() / denom.clamp_min(1.0)
+
+def masked_frequency_loss(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor):
+    """
+    频域 loss 在严格 mask 下不太“完美”（因为 rfft 会把全序列混在一起），
+    但最简单可控的做法是：先把无效位置置 0，再做 rfft。
+    pred/target: [B,L,C], mask: [B,L] bool
+    """
+    m = mask.unsqueeze(-1)  # [B,L,1]
+    pred0 = pred * m
+    tgt0  = target * m
+    pred_fft = torch.fft.rfft(pred0, dim=1)   # dim=1 是时间维
+    tgt_fft  = torch.fft.rfft(tgt0, dim=1)
+    return F.mse_loss(pred_fft.abs(), tgt_fft.abs())
 
 
 class QuantizeEMAReset(nn.Module):
@@ -487,128 +559,6 @@ class Resnet1D(nn.Module):
 
     def forward(self, x):
         return self.model(x)
-class Model(nn.Module):
-    def __init__(self,
-                 input_dim: int,  # 这里填你的 nvar (例如 6)
-                 code_num: int = 512,  # 词典大小 (有多少个不同的 token)
-                 code_dim: int = 512,  # 编码后的向量维度
-                 output_emb_width: int = 512,  # Encoder输出的通道数
-                 down_t: int = 3,  # 下采样次数 (时间轴压缩倍率 = 2^down_t)
-                 stride_t: int = 2,  # 步长
-                 width: int = 512,  # 中间隐藏层通道数
-                 depth: int = 3,  # ResNet块的深度
-                 dilation_growth_rate: int = 3,
-                 norm=None,
-                 activation: str = "relu",
-                 quantizer: str = "ema_reset",  # 推荐用 ema_reset 防止码本坍塌
-                 **kwargs) -> None:
-
-        super().__init__()
-
-        self.code_dim = code_dim
-
-        # 1. 编码器：把 IMU 数据压缩成特征
-        self.encoder = Encoder(input_emb_width=input_dim,  # 输入维度 (nvar)
-                               output_emb_width=output_emb_width,
-                               down_t=down_t,
-                               stride_t=stride_t,
-                               width=width,
-                               depth=depth,
-                               dilation_growth_rate=dilation_growth_rate,
-                               activation=activation,
-                               norm=norm)
-
-        # 2. 解码器：把特征还原成 IMU 数据
-        self.decoder = Decoder(input_emb_width=input_dim,  # 输出维度 (nvar) - 注意这里要还原回原始维度
-                               output_emb_width=output_emb_width,
-                               down_t=down_t,
-                               stride_t=stride_t,
-                               width=width,
-                               depth=depth,
-                               dilation_growth_rate=dilation_growth_rate,
-                               activation=activation,
-                               norm=norm)
-
-        # 3. 量化器：把连续特征变成离散 Code ID
-        if quantizer == "ema_reset":
-            self.quantizer = QuantizeEMAReset(code_num, code_dim, mu=0.99)
-        elif quantizer == "orig":
-            self.quantizer = Quantizer(code_num, code_dim, beta=1.0)
-        elif quantizer == "ema":
-            self.quantizer = QuantizeEMA(code_num, code_dim, mu=0.99)
-        elif quantizer == "reset":
-            self.quantizer = QuantizeReset(code_num, code_dim)
-
-    def preprocess(self, x):
-        # 你的输入: (batch, seq_len, nvar)
-        # Conv1d 需要: (batch, nvar, seq_len)
-        # 所以我们需要 permute(0, 2, 1)
-        x = x.permute(0, 2, 1)
-        return x
-
-    def postprocess(self, x):
-        # 还原回: (batch, seq_len, nvar)
-        x = x.permute(0, 2, 1)
-        return x
-
-    def forward(self, features: Tensor):
-        """
-        训练时用这个方法
-        输入: features (Batch, Seq_Len, N_Var)
-        输出: 重建数据, 量化损失, 困惑度
-        """
-        # 1. 维度变换 (B, T, C) -> (B, C, T)
-        x_in = self.preprocess(features)
-
-        # 2. 编码 (压缩时间轴)
-        x_encoder = self.encoder(x_in)
-
-        # 3. 量化 (变成离散 Code 并计算 loss)
-        # x_quantized: 量化后的向量 (用于解码)
-        # loss: Commitment Loss (强迫 Encoder 输出接近 Codebook)
-        # perplexity: 监控指标，看用到了多少个 Code
-        x_quantized, loss, perplexity = self.quantizer(x_encoder)
-
-        # 4. 解码 (还原时间轴)
-        x_decoder = self.decoder(x_quantized)
-
-        # 5. 维度还原 (B, C, T) -> (B, T, C)
-        x_out = self.postprocess(x_decoder)
-
-        return x_out, loss, perplexity
-
-    def get_token_ids(self, features: Tensor):
-        """
-        【重要】做 LLM 训练时用这个方法！
-        输入: IMU 数据 (Batch, Seq_Len, N_Var)
-        输出: Token ID 序列 (Batch, Seq_Len_Compressed)
-        """
-        N, T, _ = features.shape
-        x_in = self.preprocess(features)
-        x_encoder = self.encoder(x_in)  # (B, C, T_compressed)
-
-        # 调整形状以适应量化器
-        x_encoder = x_encoder.permute(0, 2, 1)  # (B, T_compressed, C)
-        x_encoder = x_encoder.contiguous().view(-1, x_encoder.shape[-1])  # (B*T, C)
-
-        # 获取 ID
-        code_idx = self.quantizer.quantize(x_encoder)
-        code_idx = code_idx.view(N, -1)  # (B, T_compressed)
-
-        return code_idx
-
-    def decode_from_ids(self, ids: Tensor):
-        """
-        验证时用，看 Token 对应的动作长啥样
-        输入: Token ID (Batch, T_compressed)
-        输出: IMU 数据
-        """
-        x_d = self.quantizer.dequantize(ids)
-        x_d = x_d.view(ids.shape[0], -1, self.code_dim).permute(0, 2, 1).contiguous()
-        x_decoder = self.decoder(x_d)
-        x_out = self.postprocess(x_decoder)
-        return x_out
-
 
 # Encoder 和 Decoder 类保持原样即可，它们的逻辑是通用的
 class Encoder(nn.Module):
@@ -657,11 +607,216 @@ class Decoder(nn.Module):
         return self.model(x)
 
 
+def frequency_loss(pred, target):
+    # 将时间序列转到频域 (FFT)
+    # dim=-2 是时间维度
+    pred_fft = torch.fft.rfft(pred, dim=-2)
+    target_fft = torch.fft.rfft(target, dim=-2)
+
+    # 计算频域幅度的差异
+    loss = F.mse_loss(torch.abs(pred_fft), torch.abs(target_fft))
+    return loss
+class IMU_VQ_Model(nn.Module):
+    def __init__(self,
+                 args) -> None:
+
+        super().__init__()
+        self.args = args
+
+        self.device = args.device
+        # -------- dataset cfg load --------
+        self.dataset_key = str(getattr(args, "dataset_key", getattr(args, "data", "mhealth"))).lower()
+        self.ds_cfg: Dict[str, Any] = {}
+        if hasattr(args, "ds_cfg") and isinstance(args.ds_cfg, dict):
+            self.ds_cfg = args.ds_cfg
+        else:
+            ts_yaml = getattr(args, "ts_backbone_yaml", None)
+            if ts_yaml is not None:
+                if yaml is None:
+                    raise ImportError("pyyaml not installed but ts_backbone_yaml is set.")
+                if not os.path.exists(ts_yaml):
+                    raise FileNotFoundError(ts_yaml)
+                with open(ts_yaml, "r", encoding="utf-8") as f:
+                    cfg_all = yaml.safe_load(f)
+                if self.dataset_key not in cfg_all:
+                    raise KeyError(f"{self.dataset_key} not in {ts_yaml}")
+                self.ds_cfg = cfg_all[self.dataset_key]
+        self.d_model = self.args.d_model
+        self.C = int(self.ds_cfg.get("channel_num", getattr(args, "enc_in", 15)))
+        self.num_class = int(self.ds_cfg.get("num_labels", getattr(args, "num_class", 12)))
+        self.down_sampling_layers = self.args.down_sampling_layers
+
+        self.input_dim=self.C #  这里填你的 nvar (例如 6)
+        self.code_num=  512  # 词典大小 (有多少个不同的 token)
+        self.output_emb_width=  512  # Encoder输出的通道数
+        self.code_dim=  512  # 编码后的向量维度
+        self.down_t=  3  # 下采样次数 (时间轴压缩倍率 = 2^down_t)
+        self.stride_t=  2  # 步长
+        self.width=  512  # 中间隐藏层通道数
+        self.depth=  3  # ResNet块的深度
+        self.dilation_growth_rate=  3
+        self.norm=None
+        self.activation=  "relu"
+        self.quantizer=  "ema_reset"  # 推荐用 ema_reset 防止码本坍塌
+
+
+
+
+
+        # 1. 编码器：把 IMU 数据压缩成特征
+        self.encoder = Encoder(input_emb_width=self.input_dim,  # 输入维度 (nvar)
+                               output_emb_width=self.output_emb_width,
+                               down_t=self.down_t,
+                               stride_t=self.stride_t,
+                               width=self.width,
+                               depth=self.depth,
+                               dilation_growth_rate=self.dilation_growth_rate,
+                               activation=self.activation,
+                               norm=self.norm)
+
+        # 2. 解码器：把特征还原成 IMU 数据
+        self.decoder = Decoder(input_emb_width=self.input_dim,  # 输出维度 (nvar) - 注意这里要还原回原始维度
+                               output_emb_width=self.output_emb_width,
+                               down_t=self.down_t,
+                               stride_t=self.stride_t,
+                               width=self.width,
+                               depth=self.depth,
+                               dilation_growth_rate=self.dilation_growth_rate,
+                               activation=self.activation,
+                               norm=self.norm)
+
+        # 3. 量化器：把连续特征变成离散 Code ID
+        if self.quantizer == "ema_reset":
+            self.quantizer = QuantizeEMAReset(self.code_num, self.code_dim, mu=0.99)
+        elif self.quantizer == "orig":
+            self.quantizer = Quantizer(self.code_num, self.code_dim, beta=1.0)
+        elif self.quantizer == "ema":
+            self.quantizer = QuantizeEMA(self.code_num, self.code_dim, mu=0.99)
+        elif self.quantizer == "reset":
+            self.quantizer = QuantizeReset(self.code_num, self.code_dim)
+
+    def preprocess(self, x):
+        # 你的输入: (batch, seq_len, nvar)
+        # Conv1d 需要: (batch, nvar, seq_len)
+        # 所以我们需要 permute(0, 2, 1)
+        x = x.permute(0, 2, 1)
+        return x
+
+    def postprocess(self, x):
+        # 还原回: (batch, seq_len, nvar)
+        x = x.permute(0, 2, 1)
+        return x
+
+    def forward(self, features, padding_mask=None, mode="pretrain"):
+        """
+        features: [B, L, C]
+        padding_mask: [B, L] (可选) True/1 表示有效位置
+        """
+        B, L, C = features.shape
+
+        # 1) pad 到 2^down_t 的倍数，避免 100->96 的结构性截断
+        multiple = 2 ** int(self.down_t)  # down_t=3 => 8
+        x_in, L_orig = _pad_to_multiple(features, multiple=multiple, pad_value=0.0)  # [B, L_pad, C]
+        L_pad = x_in.shape[1]
+
+        # 2) mask 对齐到 pad 后长度：pad 部分强制无效
+        if padding_mask is None:
+            mask = torch.ones((B, L_orig), device=features.device, dtype=torch.bool)
+        else:
+            mask = padding_mask.bool()
+        mask = _pad_mask_to_len(mask, L_pad)  # [B, L_pad]，pad 部分是 False
+
+        # 3) 走你的编码-量化-解码
+        x_conv_in = self.preprocess(x_in)  # [B, C, L_pad]
+        x_encoder = self.encoder(x_conv_in)  # [B, D, L_pad/8]
+        x_quantized, qua_loss, perplexity = self.quantizer(x_encoder)
+        x_decoder = self.decoder(x_quantized)  # [B, C, L_pad] （理想情况下回到 L_pad）
+        x_out_pad = self.postprocess(x_decoder)  # [B, L_pad, C]
+
+        # 4) crop 回原长度（对外输出严格等于输入长度）
+        x_out = x_out_pad[:, :L_orig, :]  # [B, L_orig, C]
+        mask_crop = mask[:, :L_orig]  # [B, L_orig]
+
+        # 5) 只在有效位置算 loss（pad 不参与）
+        recon_loss = masked_mse(x_out, features, mask_crop)
+        recon_loss_l1 = masked_l1(x_out, features, mask_crop)
+        freq_loss = masked_frequency_loss(x_out, features, mask_crop)
+
+        # finel_loss = recon_loss + recon_loss_l1 + freq_loss + qua_loss
+        if self.args.loss_style == "qua":
+            finel_loss = qua_loss
+        elif self.args.loss_style == "freq":
+            finel_loss = freq_loss
+        elif self.args.loss_style == "recon":
+            finel_loss = recon_loss + recon_loss_l1
+        elif self.args.loss_style == "qua+freq":
+            finel_loss =qua_loss+freq_loss
+        elif self.args.loss_style == "qua+recon":
+            finel_loss = qua_loss + recon_loss + recon_loss_l1
+        elif self.args.loss_style == "freq+recon":
+            finel_loss = freq_loss + recon_loss + recon_loss_l1
+        else:
+            finel_loss = recon_loss + recon_loss_l1 + freq_loss + qua_loss
+
+        # finel_loss =  qua_loss
+
+        return finel_loss, x_out, {
+            "qua_loss": qua_loss,
+            "recon_loss": recon_loss,
+            "recon_loss_l1": recon_loss_l1,
+            "freq_loss": freq_loss,
+            "perplexity": perplexity,
+            "finel_loss": finel_loss,
+            "L_orig": L_orig,
+            "L_pad": L_pad,
+        }
+
+    def get_token_ids(self, features: Tensor):
+        """
+        【重要】做 LLM 训练时用这个方法！
+        输入: IMU 数据 (Batch, Seq_Len, N_Var)
+        输出: Token ID 序列 (Batch, Seq_Len_Compressed)
+        """
+        N, T, _ = features.shape
+        x_in = self.preprocess(features)
+        x_encoder = self.encoder(x_in)  # (B, C, T_compressed)
+
+        # 调整形状以适应量化器
+        x_encoder = x_encoder.permute(0, 2, 1)  # (B, T_compressed, C)
+        x_encoder = x_encoder.contiguous().view(-1, x_encoder.shape[-1])  # (B*T, C)
+
+        # 获取 ID
+        code_idx = self.quantizer.quantize(x_encoder)
+        code_idx = code_idx.view(N, -1)  # (B, T_compressed)
+
+        return code_idx
+
+    def decode_from_ids(self, ids: Tensor):
+        """
+        验证时用，看 Token 对应的动作长啥样
+        输入: Token ID (Batch, T_compressed)
+        输出: IMU 数据
+        """
+        x_d = self.quantizer.dequantize(ids)
+        x_d = x_d.view(ids.shape[0], -1, self.code_dim).permute(0, 2, 1).contiguous()
+        x_decoder = self.decoder(x_d)
+        x_out = self.postprocess(x_decoder)
+        return x_out
+
+
+    def save_wrapper(self, path: str):
+        if os.path.dirname(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save(self.state_dict(), path)
+
+    def load_wrapper(self, path: str, map_location="cpu"):
+        sd = torch.load(path, map_location=map_location)
+        self.load_state_dict(sd, strict=False)
 
 
 if __name__ == '__main__':
     batch_imu = torch.randn(32,96,7)
-    model = IMUVQVAE(input_dim=7)
+    model = IMU_VQ_Model(input_dim=7)
     criterion_mse = nn.MSELoss()
     # criterion_freq = FrequencyAwareLoss()  # 你上一篇论文的精华
 

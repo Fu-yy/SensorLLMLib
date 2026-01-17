@@ -74,6 +74,9 @@ LR=0.001
 PRETRAIN_EPOCHS=10
 EPOCHS=8
 
+
+
+
 # Stage 1
 python -u run.py \
   --task_name classification --is_training 1 --root_path "$DATA_ROOT" \

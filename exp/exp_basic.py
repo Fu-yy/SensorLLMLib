@@ -11,7 +11,8 @@ from models import Autoformer, Transformer, TimesNet, Nonstationary_Transformer,
     Koopa, TiDE, FreTS, TimeMixer, TSMixer, SegRNN, MambaSimple, TemporalFusionTransformer, SCINet, PAttn, TimeXer, \
     WPMixer, MultiPatchFormer, KANAD, MSGNet, TimeFilter, Sundial, TimeMoE, SensorLLMFuy
 from models_new_version_run import SensorLLMFuy_202512301643_backmodel_randommask, SensorLLMFuy_batch_20251231_163911, \
-    SensorLLMFuy_batch_20251231_164145, SensorLLMFuy_test, SensorLLMFuy_test_withllm_mae
+    SensorLLMFuy_batch_20251231_164145, SensorLLMFuy_test, SensorLLMFuy_test_withllm_mae, VQ_VAE, \
+    SensorLLMFuy_test_withllm_mae_vqvae
 
 
 class Exp_Basic(object):
@@ -56,11 +57,13 @@ class Exp_Basic(object):
             'SensorLLMFuy_202512301643_backmodel_randommask':SensorLLMFuy_202512301643_backmodel_randommask,
             'SensorLLMFuy_batch_20251231_163911':SensorLLMFuy_batch_20251231_163911,
             'SensorLLMFuy_batch_20251231_164145':SensorLLMFuy_batch_20251231_164145,
+            'VQVAE':VQ_VAE,
             # 'SensorLLMFuy_batch_20251231_164145_new':SensorLLMFuy_batch_20251231_164145_new,
             'SensorLLMFuy_test':SensorLLMFuy_test,
             # 'SensorLLMFuy_test_nollm_contri':SensorLLMFuy_test_nollm_contri,
             # 'SensorLLMFuy_test_nollm_mae':SensorLLMFuy_test_nollm_mae,
             'SensorLLMFuy_test_withllm_mae':SensorLLMFuy_test_withllm_mae,
+            'SensorLLMFuy_test_withllm_mae_vqvae':SensorLLMFuy_test_withllm_mae_vqvae,
 
             # 'Chronos': Chronos,
             # 'Moirai': Moirai,
