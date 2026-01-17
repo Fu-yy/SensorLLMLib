@@ -195,7 +195,7 @@ if __name__ == '__main__':
     # teachers
     parser.add_argument('--warmup_only', type=int, default=1, help='warmup_only')
     parser.add_argument('--kmeans_trigger_epoch', type=int, default=1, help='kmeans_trigger_epoch')
-    parser.add_argument('--build_kmeans_centers', type=int, default=1, help='build_kmeans_centers')
+    parser.add_argument('--build_kmeans_centers', type=int, default=0, help='build_kmeans_centers')
     parser.add_argument('--kmeans_centers_path', type=str, default=r"D:\fuy\MyCode\SensorLLMLib_version2\runs\SensorLLMFuy_test_withllm_mae\motionsense\$RUN_ID\meta\classification_MotionSense_SensorLLMFuy_test_withllm_mae_MotionSense_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0\kmeans_centers_K32.pt", help='kmeans_centers_path')
     parser.add_argument('--teacher_mode', type=str, default="online", help='teacher_mode')
     parser.add_argument('--loss_style', type=str, default="all", help='loss_style')
