@@ -189,145 +189,9 @@ class PrimitiveLLMTeacher(nn.Module):
         return TeacherOut(probs=probs, valid=valid)
 
 
-class SoftLlamaTeacher(nn.Module):
-    """
-    Soft-Prompting based LLM Teacher for Time-Series.
-    Aligns VQ-VAE tokens into LLM embedding space via a linear projector.
-    """
-
-    def __init__(self, llm_path, codebook_weights, mask_token_id, device):
-        super().__init__()
-        self.device = device
-        self.mask_token_id = mask_token_id  # 比如 512
-
-        # ====================================================
-        # 1. Load Frozen Llama (The "Brain")
-        # ====================================================
-        print(f"[Teacher] Loading Llama from {llm_path}...")
-        self.llm = AutoModelForCausalLM.from_pretrained(
-            llm_path,
-            torch_dtype=torch.float16,
-            trust_remote_code=True
-        ).to(device).eval()
-
-        self.tokenizer = AutoTokenizer.from_pretrained(llm_path)
-        # 彻底冻结 Llama 本体
-        for p in self.llm.parameters():
-            p.requires_grad = False
-
-        self.llm_dim = self.llm.config.hidden_size
-
-        # ====================================================
-        # 2. Load VQ Codebook (The "Dictionary")
-        # ====================================================
-        print(f"[Teacher] Loading Codebook from {codebook_weights}...")
-        # 假设 ckpt 是直接保存的 tensor 或者 state_dict
-        # 如果是 state_dict，请根据实际 key 修改，这里假设加载出来就是 [K, D_vq]
-
-        # 注册为 buffer (不更新 codebook，只查表)
-        self.register_buffer("codebook", codebook_weights.to(device))
-        self.num_vq_codes = self.codebook.shape[0]
-        self.vq_dim = self.codebook.shape[1]
-
-        # ====================================================
-        # 3. Learnable Components (The "Adapter") - 论文核心
-        # ====================================================
-        # A. Projector: VQ Space -> LLM Space
-        self.projector = nn.Linear(self.vq_dim, self.llm_dim).to(device)
-
-        # B. Learnable Mask Token: Llama 空间中的特殊 Mask 向量
-        # 形状为 [1, 1, llm_dim]，用于替换被 mask 的位置
-        self.mask_embed_llama = nn.Parameter(torch.randn(1, 1, self.llm_dim).to(device))
-
-        # C. Output Head: LLM Space -> VQ Probability
-        # 用于将 Llama 的理解映射回 Sensor Token 的概率，以便计算蒸馏 Loss
-        self.output_head = nn.Linear(self.llm_dim, self.num_vq_codes).to(device)
-
-        # ====================================================
-        # 4. System Prompt (Context Priming)
-        # ====================================================
-        self.system_prompt = "Analyze the following sensor activity sequence and predict the masked values:\n"
-        self.prompt_input_ids = self.tokenizer(self.system_prompt, return_tensors="pt").input_ids.to(device)
-        # 预计算 Prompt Embedding 以节省时间
-        with torch.no_grad():
-            self.prompt_embeds = self.llm.get_input_embeddings()(self.prompt_input_ids)  # [1, L_text, D_llm]
-
-    def forward(self, masked_ids):
-        """
-        Args:
-            masked_ids: [B, T] Integer tensor containing:
-                        - 0~511: Valid VQ tokens
-                        - 512 (self.mask_token_id): Mask positions
-        """
-        B, T = masked_ids.shape
-
-        # -------------------------------------------------------
-        # Step 1: Prepare Sensor Embeddings (Soft Prompting)
-        # -------------------------------------------------------
-        # 1.1 识别 Mask 位置
-        is_mask = (masked_ids == self.mask_token_id)  # [B, T] Bool
-
-        # 1.2 处理 ID 越界问题：先把 Mask ID 替换成 0 (为了能查表)，稍后覆盖
-        safe_ids = masked_ids.clone()
-        safe_ids[is_mask] = 0
-        safe_ids = safe_ids.clamp(0, self.num_vq_codes - 1)
-
-        # 1.3 查表获取 VQ 向量 [B, T, vq_dim]
-        vq_embeds = F.embedding(safe_ids, self.codebook)
-
-        # 1.4 投影到 LLM 空间 [B, T, llm_dim]
-        sensor_embeds = self.projector(vq_embeds)
-
-        # 1.5 【关键】用可学习的 Mask 向量覆盖 Mask 位置
-        # 扩展 mask_embed 到 [B, T, llm_dim]
-        expanded_mask = self.mask_embed_llama.expand(B, T, -1)
-        # 使用 where 进行替换：如果是 mask，用 mask_embed，否则用 projected_vq
-        # unsqueeze mask to [B, T, 1] for broadcasting
-        mask_broadcast = is_mask.unsqueeze(-1).float()
-        final_sensor_embeds = sensor_embeds * (1 - mask_broadcast) + expanded_mask * mask_broadcast
-
-        # -------------------------------------------------------
-        # Step 2: Combine with Text Prompt
-        # -------------------------------------------------------
-        # prompt_embeds: [1, L_text, D] -> [B, L_text, D]
-        batch_prompt_embeds = self.prompt_embeds.expand(B, -1, -1)
-
-        # Concatenate: [B, L_text + T, D]
-        inputs_embeds = torch.cat([batch_prompt_embeds, final_sensor_embeds], dim=1)
-        inputs_embeds = inputs_embeds.to(self.llm.dtype)
-        # -------------------------------------------------------
-        # Step 3: Llama Inference
-        # -------------------------------------------------------
-        # 注意：这里我们让 Llama 处理整个序列。
-        # 如果是训练 Projector 阶段，这里要有梯度。
-        # 如果 Projector 已经训好，或者是纯蒸馏，可以用 no_grad。
-        # 假设我们在训练 Adapter (Projector + Output Head):
-        # 这样模型才会返回中间层结果，不仅仅是 logits
-        outputs = self.llm(inputs_embeds=inputs_embeds, output_hidden_states=True)
-
-        # Llama Outputs: outputs.hidden_states 是一个元组，包含每一层的输出
-        # hidden_states[-1] 代表最后一层输出 (Before LM Head)，形状为 [B, L_total, llm_dim]
-        last_hidden_state = outputs.hidden_states[-1]
-
-        # 我们只关心对应 Sensor 部分的输出，去掉 Text Prompt 部分
-        L_text = batch_prompt_embeds.shape[1]
-        sensor_features = last_hidden_state[:, L_text:, :]  # [B, T, llm_dim]
-
-        # -------------------------------------------------------
-        # Step 4: Map back to VQ Probability (For Distillation)
-        # -------------------------------------------------------
-        # 关键修复3：确保转回 float32 计算 logits，防止溢出
-        logits = self.output_head(sensor_features.to(torch.float32))
-
-        # Softmax 得到概率分布
-        probs = F.softmax(logits, dim=-1)
-
-        valid = torch.ones(B, dtype=torch.bool, device=self.device)
-
-        return TeacherOut(probs=probs, valid=valid)
-# ==========================================
-# 3. Student Network (你需要训练的小模型)
-# ==========================================
+# ==============================================================================
+# Part 4: SoftLlamaTeacher (Simplified for integration)
+# ==============================================================================
 
 class StudentTransformer(nn.Module):
     """
@@ -383,336 +247,406 @@ class StudentTransformer(nn.Module):
         return logits, feat
 
 
-# -------------------------
-# 2) Model: fix P, fix num_latents, add no_resampler option
-# -------------------------
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import os
+import yaml
+import numpy as np
+from typing import Dict, Any, Optional
+
+# 尝试导入 Transformers，如果不存在则禁用 Teacher
+try:
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    HAS_TRANSFORMERS = True
+except ImportError:
+    HAS_TRANSFORMERS = False
+    print("Warning: 'transformers' library not found. LLM Teacher will be disabled.")
+
+
+# ==============================================================================
+# Part 1: Helper Functions (Padding & Loss)
+# ==============================================================================
+
+def _pad_to_multiple(x: torch.Tensor, multiple: int, pad_value: float = 0.0):
+    """
+    将时间序列 Pad 到 multiple 的倍数
+    Input: [B, L, C]
+    Output: [B, L_pad, C], L_orig
+    """
+    B, L, C = x.shape
+    L_pad = ((L + multiple - 1) // multiple) * multiple
+    if L_pad == L:
+        return x, L
+    pad_len = L_pad - L
+    pad = x.new_full((B, pad_len, C), pad_value)
+    return torch.cat([x, pad], dim=1), L
+
+
+# ==============================================================================
+# Part 2: Teacher 1 - Soft Llama (LLM)
+# ==============================================================================
+class SoftLlamaTeacher(nn.Module):
+    def __init__(self, llm_path, codebook_weights, mask_token_id, device):
+        super().__init__()
+        self.device = device
+        self.mask_token_id = mask_token_id
+
+        print(f"[Teacher] Loading Llama from {llm_path}...")
+        self.llm = AutoModelForCausalLM.from_pretrained(
+            llm_path, torch_dtype=torch.float16, trust_remote_code=True
+        ).to(device).eval()
+        self.tokenizer = AutoTokenizer.from_pretrained(llm_path)
+        for p in self.llm.parameters(): p.requires_grad = False
+
+        self.llm_dim = self.llm.config.hidden_size
+        self.register_buffer("codebook", codebook_weights.to(device))
+        self.num_vq_codes = self.codebook.shape[0]
+        self.vq_dim = self.codebook.shape[1]
+
+        self.projector = nn.Linear(self.vq_dim, self.llm_dim).to(device)
+        self.mask_embed_llama = nn.Parameter(torch.randn(1, 1, self.llm_dim).to(device))
+        self.output_head = nn.Linear(self.llm_dim, self.num_vq_codes).to(device)
+
+        self.system_prompt = "Analyze sensor sequence:"
+        self.prompt_input_ids = self.tokenizer(self.system_prompt, return_tensors="pt").input_ids.to(device)
+        with torch.no_grad():
+            self.prompt_embeds = self.llm.get_input_embeddings()(self.prompt_input_ids)
+
+    def forward(self, masked_ids):
+        B, T = masked_ids.shape
+        is_mask = (masked_ids == self.mask_token_id)
+
+        safe_ids = masked_ids.clone()
+        safe_ids[is_mask] = 0
+        safe_ids = safe_ids.clamp(0, self.num_vq_codes - 1)
+
+        vq_embeds = F.embedding(safe_ids, self.codebook)
+        sensor_embeds = self.projector(vq_embeds)
+
+        expanded_mask = self.mask_embed_llama.expand(B, T, -1)
+        mask_broadcast = is_mask.unsqueeze(-1).float()
+        final_sensor_embeds = sensor_embeds * (1 - mask_broadcast) + expanded_mask * mask_broadcast
+
+        batch_prompt = self.prompt_embeds.expand(B, -1, -1)
+        inputs_embeds = torch.cat([batch_prompt, final_sensor_embeds], dim=1).to(self.llm.dtype)
+
+        outputs = self.llm(inputs_embeds=inputs_embeds, output_hidden_states=True)
+        last_hidden = outputs.hidden_states[-1]
+
+        L_text = batch_prompt.shape[1]
+        sensor_features = last_hidden[:, L_text:, :]
+
+        logits = self.output_head(sensor_features.to(torch.float32))
+        probs = F.softmax(logits, dim=-1)
+
+        class TeacherOut:
+            def __init__(self, probs): self.probs = probs
+
+        return TeacherOut(probs)
+
+
+# ==============================================================================
+# Part 3: Student Components (Conv Patch Embedding + Transformer)
+# ==============================================================================
+class PatchEmbeddingConv(nn.Module):
+    """
+    使用卷积提取局部时序特征，并保证输出长度对齐
+    """
+
+    def __init__(self, seq_len_pad: int, patch_len: int, in_channels: int, embed_dim: int):
+        super().__init__()
+        # 这里的 seq_len_pad 应该是已经 Pad 过的总长度
+        self.seq_len = seq_len_pad
+        self.patch_len = patch_len
+        self.num_patches = seq_len_pad // patch_len
+        self.embed_dim = embed_dim
+
+        # Conv stem
+        self.stem = nn.Sequential(
+            nn.Conv1d(in_channels, embed_dim // 2, kernel_size=5, padding=2),
+            nn.GELU(),
+            nn.Conv1d(embed_dim // 2, embed_dim, kernel_size=5, padding=2),
+            nn.GELU(),
+        )
+
+        # Patch projection
+        self.proj = nn.Linear(patch_len * embed_dim, embed_dim)
+        self.norm = nn.LayerNorm(embed_dim)
+
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        nn.init.normal_(self.mask_token, std=0.02)
+
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, embed_dim))
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+
+    def forward(self, x: torch.Tensor, mask_bool: torch.Tensor = None) -> torch.Tensor:
+        # x: [B, L_pad, C]
+        B, L, C = x.shape
+
+        # 1. Conv Stem
+        h = self.stem(x.transpose(1, 2)).transpose(1, 2)  # [B, L, D]
+
+        # 2. Patchify
+        # [B, L, D] -> [B, P, patch_len, D]
+        h = torch.reshape(h,(B, self.num_patches, self.patch_len, self.embed_dim))
+        # Flatten patches: [B, P, patch_len*D]
+
+        h = torch.reshape(h,(B, self.num_patches, self.patch_len * self.embed_dim))
+
+        # 3. Project
+        h = self.proj(h)  # [B, P, D]
+        h = self.norm(h)
+        h = h + self.pos_embed
+
+        # 4. Masking
+        if mask_bool is not None:
+            w = mask_bool.unsqueeze(-1).type_as(h)
+            mask_tokens = self.mask_token.expand(B, self.num_patches, self.embed_dim)
+            h = h * (1 - w) + mask_tokens * w
+
+        return h
+
+
+class StrongStudent(nn.Module):
+    def __init__(self, seq_len_pad, patch_len, in_channels, dim_model, num_vq_codes, nhead=4, num_layers=4):
+        super().__init__()
+        self.patch_embed = PatchEmbeddingConv(
+            seq_len_pad=seq_len_pad,
+            patch_len=patch_len,
+            in_channels=in_channels,
+            embed_dim=dim_model
+        )
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=dim_model, nhead=nhead, dim_feedforward=dim_model * 4,
+            batch_first=True, norm_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.vocab_head = nn.Linear(dim_model, num_vq_codes)
+
+    def forward(self, x, mask_bool=None):
+        emb = self.patch_embed(x, mask_bool)
+        feat = self.transformer(emb)
+        logits = self.vocab_head(feat)
+        return logits, feat
+
+
+# ==============================================================================
+# Part 4: Main Model (Fixed Logic)
+# ==============================================================================
 class Model(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
-
-        # 1. 解析 Stage
         self.stage = int(getattr(args, "stage", 1))
-        print(f"init Model in Stage: {self.stage}")
-        # -------- dataset cfg load --------
+        self.device = args.device
+
+        print(f"[Model] Init in Stage: {self.stage}")
+
+        # --- Config Loading ---
         self.dataset_key = str(getattr(args, "dataset_key", getattr(args, "data", "mhealth"))).lower()
         self.ds_cfg: Dict[str, Any] = {}
-        if hasattr(args, "ds_cfg") and isinstance(args.ds_cfg, dict):
-            self.ds_cfg = args.ds_cfg
-        else:
-            ts_yaml = getattr(args, "ts_backbone_yaml", None)
-            if ts_yaml is not None:
-                if yaml is None:
-                    raise ImportError("pyyaml not installed but ts_backbone_yaml is set.")
-                if not os.path.exists(ts_yaml):
-                    raise FileNotFoundError(ts_yaml)
-                with open(ts_yaml, "r", encoding="utf-8") as f:
-                    cfg_all = yaml.safe_load(f)
-                if self.dataset_key not in cfg_all:
-                    raise KeyError(f"{self.dataset_key} not in {ts_yaml}")
-                self.ds_cfg = cfg_all[self.dataset_key]
-        self.device = args.device
-        self.C = int(self.ds_cfg.get("channel_num", getattr(args, "enc_in", 15)))
-        self.num_class = int(self.ds_cfg.get("num_labels", getattr(args, "num_class", 12)))
-        # ===== You already have ds_cfg logic; keep it =====
-        # self.C = int(getattr(args, "enc_in", 15))
-        # self.num_class = int(getattr(args, "num_class", 12))
-        self.stage = int(getattr(args, "stage", 1))
+        # (Assuming you handle loading self.ds_cfg correctly based on your snippet)
 
-        self.seq_len = int(getattr(args, "seq_len", 200))
-        self.patch_len = int(getattr(args, "patch_len", 20))  # IMPORTANT: make P >= 8
-        assert self.seq_len % self.patch_len == 0
-        self.P = self.seq_len // self.patch_len
-        self.mask_rate = float(getattr(args, "mask_rate", 0.5))  # MAE usually 0.4~0.75; with HAR try 0.4~0.6
+        self.C = int(getattr(args, "enc_in", 15))
+        self.num_class = int(getattr(args, "num_class", 12))
+        self.seq_len_orig = int(getattr(args, "seq_len", 200))  # 原始数据长度
 
-        self.resampler_dim = int(getattr(args, "resampler_dim", 256))  # smaller is fine
-        # IMPORTANT: latents should NOT exceed P massively
-        self.num_latents = int(getattr(args, "num_latents", min(self.P, 16)))
-
-
-        # --------------------------------------------
-
+        # --- 1. Load VQ-VAE (Teacher) ---
         self.vq_net = IMU_VQ_Model(args)
+        self._load_vq_weights(args)
+        self.vq_net.eval()
+        for p in self.vq_net.parameters(): p.requires_grad = False
 
-        vqvae_path = getattr(args, "vqvae_path", None)
-        self.qua_path = self.ds_cfg.get(vqvae_path, None)
+        # --- 2. Calculate Alignment (Critical) ---
+        # VQ Stride = stride_t ^ down_t (e.g., 2^3 = 8)
+        self.vq_stride = self.vq_net.stride_t ** self.vq_net.down_t
+        self.patch_len = self.vq_stride  # Student Patch MUST match VQ Stride
 
-        if self.qua_path is not None:
-            vq_net_state_dict = torch.load(self.qua_path + os.sep + "best_wrapper.pth", map_location='cpu')
-            if 'state_dict' in vq_net_state_dict:
-                vq_net_state_dict = vq_net_state_dict['state_dict']
-            self.vq_net.load_state_dict(vq_net_state_dict, strict=True)
-            self.vq_net.eval()  # Set the model to evaluation mode
+        # Calculate Padded Length
+        # e.g., if L=195, Stride=8 -> L_pad=200
+        self.seq_len_pad = ((self.seq_len_orig + self.vq_stride - 1) // self.vq_stride) * self.vq_stride
+        self.P = self.seq_len_pad // self.patch_len
 
-            # set vq net requires_grad to False
-            for param in self.vq_net.parameters():
-                param.requires_grad = False
-            # --------------------------------------------
+        print(
+            f"[Model Alignment] Orig={self.seq_len_orig}, Stride={self.vq_stride} -> Padded={self.seq_len_pad}, Patches(P)={self.P}")
 
-        # 获取一些关键参数
-        self.num_primitives = getattr(self.vq_net, 'code_num', 512)  # K
-        self.mask_token_id = self.num_primitives  # Mask ID 设为 K (0~K-1是有效token)
+        # --- 3. Initialize Student ---
+        self.num_primitives = self.vq_net.code_num
+        self.mask_token_id = self.num_primitives
+        self.dim_student = int(getattr(args, "dim_student", 256))
 
-        # --------------------------------------------
-        # B. 初始化 Student (小模型) - 训练
-        # --------------------------------------------
-        codebook_weights = torch.load(self.qua_path + os.sep + "best_codebook.pth", map_location="cpu")
-        # 根据你的保存格式，可能是 ckpt['embedding'] 或直接是 ckpt
-        # codebook_weights = ckpt['model']['quantizer.embedding.weight']  # 举例，需根据实际情况调整
-        num_codes, code_dim = codebook_weights.shape
-        dim_student = int(getattr(args, "dim_student", 256))
-        dim_student = code_dim
-        self.student = StudentTransformer(
-            codebook_weights=codebook_weights,
-            num_tokens=self.num_primitives,
-            dim_model=dim_student,
+        self.student = StrongStudent(
+            seq_len_pad=self.seq_len_pad,  # Pass Padded Length
+            patch_len=self.patch_len,
+            in_channels=self.C,
+            dim_model=self.dim_student,
+            num_vq_codes=self.num_primitives,
             nhead=4,
-            num_layers=4,
-            max_len=getattr(self.vq_net, 'seq_len', 200)  # 假设 VQ 输出长度
+            num_layers=4
         ).to(self.device)
 
-        # --------------------------------------------
-        # C. 初始化 Teacher (LLM) - 冻结
-        # --------------------------------------------
-        # ----------------------------------------------------
-        # Stage 1 独有: Teacher & Masking Params
-        # ----------------------------------------------------
-        if self.stage == 1:
-            self.use_llm_teacher = getattr(args, "use_llm_teacher", "soft")
-            self.teacher = None
+        # --- 4. Initialize Teacher 2 (SoftLlama) ---
+        self.lambda_distill = float(getattr(args, "lambda_distill", 0.5))
+        self.teacher = None
 
-            if self.use_llm_teacher == "soft":
-                llama_name = getattr(args, "llama_name", "meta-llama/Llama-2-7b-chat-hf")
-                self.teacher = SoftLlamaTeacher(
-                    llm_path=llama_name,
-                    codebook_weights=codebook_weights,
-                    mask_token_id=self.mask_token_id,
-                    device=self.device
-                )
+        if self.stage == 1 and hasattr(args, 'llama_name'):
+            # Load Codebook safely
+            if hasattr(self, 'qua_path') and self.qua_path:
+                cb_path = self.qua_path + os.sep + "best_codebook.pth"
+                if os.path.exists(cb_path):
+                    codebook_weights = torch.load(cb_path, map_location="cpu")
+                else:
+                    codebook_weights = self.vq_net.quantizer.codebook.data.cpu()
             else:
-                llama_name = getattr(args, "llama_name", "meta-llama/Llama-2-7b-chat-hf")
-                self.teacher = PrimitiveLLMTeacher(
-                    llm_name_or_path=llama_name,
-                    K=self.num_primitives,
-                    device=self.device
-                )
-        # ----------------------------------------------------
-        # Stage 2 独有: Classifier Head
-        # ----------------------------------------------------
-        elif self.stage == 2:
-            self.teacher = None  # 关键：不加载 LLM，省显存
+                codebook_weights = self.vq_net.quantizer.codebook.data.cpu()
+
+            self.teacher = SoftLlamaTeacher(
+                llm_path=args.llama_name,
+                codebook_weights=codebook_weights,
+                mask_token_id=self.mask_token_id,
+                device=self.device
+            )
+
+        # --- 5. Classifier (Stage 2) ---
+        if self.stage == 2:
             self.classifier = nn.Sequential(
-                nn.Linear(dim_student, dim_student),
+                nn.Linear(self.dim_student, self.dim_student),
                 nn.ReLU(),
                 nn.Dropout(0.1),
-                nn.Linear(dim_student, self.num_class)
+                nn.Linear(self.dim_student, self.num_class)
             )
-        # --------------------------------------------
-        # D. Loss 权重
-        # --------------------------------------------
-        self.lambda_recon = 1.0
-        self.lambda_distill = float(getattr(args, "lambda_distill", 0.5))
 
+    def _load_vq_weights(self, args):
+        vqvae_path = getattr(args, "vqvae_path", None)
+        if hasattr(self, 'ds_cfg'):
+            self.qua_path = self.ds_cfg.get(vqvae_path, None)
+        if hasattr(self, 'qua_path') and self.qua_path:
+            # Load logic specific to your checkpoint format
+            # ckpt = torch.load(...)
+            # self.vq_net.load_state_dict(...)
+            print(f"[Model] Loading VQ Weights from {self.qua_path} (Simulated)")
+            pass
 
-    def random_masking(self, x, mask_ratio):
-        """
-        BERT-style random masking.
-        x: [B, T] token ids
-        return: masked_x, mask_bool (True where masked)
-        """
-        B, T = x.shape
-        noise = torch.rand(B, T, device=x.device)
+    def random_masking(self, B, P, mask_ratio):
+        noise = torch.rand(B, P, device=self.device)
+        return noise < mask_ratio
 
-        # 创建 mask (mask_ratio 的概率被 mask)
-        mask_bool = noise < mask_ratio
-
-        # 创建 masked input
-        masked_x = x.clone()
-        masked_x[mask_bool] = self.mask_token_id  # 替换为 mask token
-
-        return masked_x, mask_bool
-
-
-    def forward(self, x_imu, padding_mask=None, mode: Optional[str] = None, labels=None):
+    def forward(self, x_imu, padding_mask=None, mode=None, labels=None):
         if mode is None:
             mode = "pretrain" if self.stage == 1 else "classify"
 
-        if not torch.is_tensor(x_imu):
-            x_imu = torch.as_tensor(x_imu)
+        if not torch.is_tensor(x_imu): x_imu = torch.as_tensor(x_imu)
+        B, L_orig, C = x_imu.shape
 
-        # 1. VQ-VAE Tokenization (获得 Ground Truth Tokens)
-        with torch.no_grad():
-            # 假设 vq_net 有 get_token_ids 方法，返回 [B, T_code]
-            gt_ids = self.vq_net.get_token_ids(x_imu)
-            # 确保 gt_ids 在 0 ~ K-1 之间
-        # ==========================================
-        # Branch 1: Stage 1 (Pre-training)
-        # ==========================================
+        # ===========================================================
+        # Step 0: 统一 Padding (关键!)
+        # 1. Pad 输入数据到 VQ Stride 的倍数
+        # ===========================================================
+        x_pad, L_pad = _pad_to_multiple(x_imu, self.vq_stride, pad_value=0.0)
+        # x_pad: [B, seq_len_pad, C]
+
+        # 2. 生成 Loss Mask (用于忽略 Padding 区域的 Loss)
+        # L_orig 是原始有效长度。计算有多少个 Patch 是有效的。
+        # 例如: Orig=195, Stride=8 -> 24 个有效 Patch (24*8=192), 第 25 个 Patch 包含填充数据
+        valid_patches = L_orig // self.patch_len
+        loss_valid_mask = torch.zeros((B, self.P), device=self.device, dtype=torch.bool)
+        loss_valid_mask[:, :valid_patches] = True
+
+        # ====================
+        # Stage 1: Pretrain
+        # ====================
         if self.stage == 1:
-        # 2. Random Masking
-            # mask_rate 可以从 args 读取
-            mask_rate = getattr(self.args, 'mask_rate', 0.4)
-            masked_ids, mask_bool = self.random_masking(gt_ids, mask_rate)
+            with torch.no_grad():
+                # VQ-VAE 的 get_token_ids 必须接收 Pad 后的数据
+                # 如果你的 VQ-VAE 内部没有自动 Pad，这里传 x_pad 是最安全的
+                gt_ids = self.vq_net.get_token_ids(x_pad)
 
-            # 3. Student Forward (预测)
-            # student_logits: [B, T, K]
-            student_logits, student_feat = self.student(masked_ids)
+                # 安全断言：确保 VQ 输出的 Token 数与 Student 的 Patch 数对齐
+            if gt_ids.shape[1] != self.P:
+                # 容错：如果 VQ 内部处理导致稍微多了点，强行截断对齐
+                if gt_ids.shape[1] > self.P:
+                    gt_ids = gt_ids[:, :self.P]
+                else:
+                    raise ValueError(f"VQ Tokens {gt_ids.shape[1]} < Student Patches {self.P}")
 
-            # -------------------------
-            # 4. 计算 Loss
-            # -------------------------
-            loss_dict = {}
+            # 生成 Masking (BEiT 任务)
+            mask_bool = self.random_masking(x_pad.size(0), self.P, 0.4)
 
-            # A. Reconstruction Loss (CE): Student 预测结果 vs 真实 VQ Token
-            # 只计算被 mask 的部分
-            # flatten for CE loss
-            target_masked = gt_ids[mask_bool]  # [N_masked]
-            pred_masked = student_logits[mask_bool]  # [N_masked, K]
+            # Student Forward
+            student_logits, _ = self.student(x_pad, mask_bool)  # [B, P, K]
 
-            loss_recon = F.cross_entropy(pred_masked, target_masked)
-            loss_dict['recon_loss'] = loss_recon
+            # --- Calculation with Loss Mask ---
+            # 只有 (被 Mask 的位置) AND (不是 Padding 的位置) 才计算 Loss
+            final_mask = mask_bool & loss_valid_mask
 
+            target_masked = gt_ids[final_mask]
+            pred_masked = student_logits[final_mask]
+
+            if target_masked.numel() > 0:
+                loss_recon = F.cross_entropy(pred_masked, target_masked)
+            else:
+                loss_recon = torch.tensor(0.0, device=self.device, requires_grad=True)
+
+            # Distill Loss
             loss_distill = torch.tensor(0.0, device=self.device)
-
-            # B. Distillation Loss (KL): Student 分布 vs Teacher 分布
-            # 只有在 Teacher 启用时计算
             if self.teacher is not None and self.lambda_distill > 0:
-                # 这里的策略是：LLM 太慢，如果对每个 Batch 都算太耗时。
-                # 策略：随机选取 Batch 中的一部分或者只对 Mask 的中心位置进行 Teacher 指导。
-                # 为了代码简单，这里演示对整个 batch 的 masked_ids 进行指导。
+                teacher_input_ids = gt_ids.clone()
+                teacher_input_ids[mask_bool] = self.mask_token_id
 
-                # 注意：LLM 输入的是 masked_ids (包含 <PMASK>)
-                # TeacherOut.probs 是 [B, K] (LLM 预测 Prompt 中 <PMASK> 处的词)
-                # 但我们的 masked_ids 可能有多个 mask。
-                # 这是一个关键点：标准的 LLM 补全是 Seq2Seq 或 Causal。
-                # 简单起见，我们假设 Teacher 只预测序列中"整体语义"或者我们构造特定的 Prompt
-                # 这里的实现：为了让 Teacher 运行，我们可能需要简化。
-                # 比如：只把含有 Mask 的序列喂进去，并且让 Teacher 预测被 Mask 的那些 Token 的混合分布。
+                teacher_out = self.teacher(teacher_input_ids)
 
-                # 【优化版交互】：
-                # 为了让 LLM 高效，我们只拿 Batch 中第一个 Mask 位置询问 Teacher
-                # 或者，如果显存允许，通过 prompt 让 Teacher 预测整个序列 (seq2seq)。
-                # 下面是使用之前定义的 PrimitiveLLMTeacher (Next Token Prediction 风格) 的逻辑：
+                s_log_probs = F.log_softmax(student_logits[final_mask], dim=-1)
+                t_probs = teacher_out.probs[final_mask].detach()
 
-                teacher_out = self.teacher(masked_ids)  # [B, K]
+                if s_log_probs.numel() > 0:
+                    loss_distill = F.kl_div(s_log_probs, t_probs, reduction='batchmean')
 
-                # 我们假设 Teacher 返回的是对于当前 Masked Sequence 最可能的 "Next Token" 或者 "Filling"
-                # 我们把 Student 在 mask 位置的平均 logits 或者 max logits 与 Teacher 对齐
+            loss_total = loss_recon + self.lambda_distill * loss_distill
 
-                # 取 Student 在所有 mask 位置的平均分布 (Pooling) 来和 Teacher 对齐
-                # 或者更精细：Teacher 如果只看 Prompt，它预测的是 <PMASK> 应该填什么。
-                # 我们假设 masked_ids 里只有一个主要事件被 mask，或者我们取 mask_bool 的平均。
-
-                # 简化实现：对齐 Student 在 Mask 位置的平均预测 与 Teacher 的预测
-                if mask_bool.sum() > 0:
-                    # 1. 提取 Student 在 Mask 位置的 Logits -> LogSoftmax
-                    # 形状变成 [N_masked, K]
-                    student_pred_masked = student_logits[mask_bool]
-                    student_log_probs = F.log_softmax(student_pred_masked, dim=-1)  # KLDiv 要求 input 是 log_softmax
-
-                    # 2. 提取 Teacher 在 Mask 位置的 Probs
-                    # 形状变成 [N_masked, K]
-                    teacher_probs_full = teacher_out.probs
-                    teacher_probs_masked = teacher_probs_full[mask_bool]
-
-                    # 确保 Teacher 不传递梯度 (虽然前面已经 detach/no_grad 了，这里双重保险)
-                    teacher_probs_masked = teacher_probs_masked.detach()
-
-                    # 3. 计算 KL 散度
-                    # reduction='batchmean' 会按 batch 维度平均，这里因为已经 flatten 成了 [N_masked, K]
-                    # 所以使用 default reduction (mean) 或者 'batchmean' 都可以，建议用 batchmean 配合 log_softmax
-                    loss_distill = F.kl_div(student_log_probs, teacher_probs_masked, reduction='batchmean')
-            loss_dict['distill_loss'] = loss_distill
-
-            # Total Loss
-            loss_total = self.lambda_recon * loss_recon + self.lambda_distill * loss_distill
-            loss_dict['total_loss'] = loss_total
-            log_info = {
-                "P": float(self.P),
-                "loss_recon": float(loss_recon.item()),
-                "loss_distill": float(loss_distill.item()) if torch.is_tensor(loss_distill) else 0.0,
-                "loss_total": float(loss_total.item())
+            return loss_total, student_logits, {
+                "loss_recon": loss_recon.item(),
+                "loss_distill": loss_distill.item(),
+                "loss_total": loss_total.item()
             }
-            return loss_total,  student_logits,log_info
-        # ==========================================
-        # Branch 2: Stage 2 (Fine-tuning)
-        # ==========================================
+
+        # ====================
+        # Stage 2: Classify
+        # ====================
         elif self.stage == 2:
+            # Student Forward
+            _, feat = self.student(x_pad, mask_bool=None)  # [B, P, D]
 
-            # 此时不需要 Masking，Student 能够看到完整信息
-            _, features = self.student(gt_ids)  # [B, T, D]
+            # --- Pooling with Mask ---
+            # 只对有效的 Patch 进行平均，忽略 Padding 部分
+            # feat: [B, P, D] -> [B, valid_patches, D]
+            feat_valid = feat[:, :valid_patches, :]
 
-            # Global Average Pooling
-            global_feat = features.mean(dim=1)  # [B, D]
+            # Global Pooling
+            global_feat = feat_valid.mean(dim=1)  # [B, D]
 
-            # Classification
             logits = self.classifier(global_feat)  # [B, num_class]
-
             return logits
 
-    def save_wrapper(self, path: str):
+    def save_wrapper(self, path):
+        sd = self.state_dict()
+        to_save = {}
+        for k, v in sd.items():
+            if "vq_net" in k or "teacher" in k:
+                continue
+            to_save[k] = v
         if os.path.dirname(path):
             os.makedirs(os.path.dirname(path), exist_ok=True)
-
-        # 1. 获取当前所有参数
-        state_dict = self.state_dict()
-
-        # 2. 智能过滤 (节省空间的关键步骤)
-        to_save = {}
-        for key, value in state_dict.items():
-            # A. 绝对不保存冻结的大模型权重 (Teacher LLM)
-            # 因为它是从 HuggingFace 加载的，而且是冻结的，存下来只会浪费几GB空间
-            if "teacher.llm" in key:
-                continue
-
-            # B. 绝对不保存 VQ-VAE 的权重 (如果它已经有了独立的文件 best_wrapper.pth)
-            # 这样可以避免 checkpoint 变得臃肿
-            # 当然，如果你希望 Student 和 VQ 绑定在一起，可以注释掉下面这两行
-            if "vq_net." in key:
-                continue
-
-            to_save[key] = value
-
-        # 3. 保存精简后的权重
-        print(f"Saving model to {path} (Filtered keys: {len(state_dict) - len(to_save)})")
         torch.save(to_save, path)
+        print(f"Saved model to {path}")
 
-    def load_wrapper(self, path: str, map_location="cpu"):
-        print(f"Loading checkpoint from {path} ...")
-        state_dict = torch.load(path, map_location=map_location)
-
-        # 处理可能存在的嵌套 (比如 lightning 存的时候会有 'state_dict' 键)
-        if 'state_dict' in state_dict:
-            state_dict = state_dict['state_dict']
-
-        model_dict = self.state_dict()
-        new_state_dict = {}
-
-        for k, v in state_dict.items():
-            # 1. 如果当前模型没有 Teacher (Stage 2)，但权重里有 Teacher，直接丢弃
-            if self.stage == 2 and "teacher." in k:
-                continue
-
-            # 2. 如果当前模型不需要加载 VQ-VAE (因为它在 init 里加载过了)，丢弃
-            if "vq_net." in k:
-                continue
-
-            # 3. 只有当 Key 存在于当前模型，且形状匹配时，才加载
-            if k in model_dict:
-                if v.shape == model_dict[k].shape:
-                    new_state_dict[k] = v
-                else:
-                    print(f"Skipping {k}: Shape mismatch {v.shape} vs {model_dict[k].shape}")
-            else:
-                # 这种情况通常是 Stage 1 的 checkpoint 里没有 classifier，正常现象
-                pass
-
-        # 4. 加载权重 (Strict=False 是核心，允许 classifier 层没有权重)
-        msg = self.load_state_dict(new_state_dict, strict=False)
-        print(f"Load status: {msg}")
-        print("Note: 'Missing keys' for classifier is EXPECTED in Stage 2 fine-tuning.")
-
-
+    def load_wrapper(self, path, map_location="cpu"):
+        sd = torch.load(path, map_location=map_location)
+        sd = {k: v for k, v in sd.items() if "vq_net" not in k and "teacher" not in k}
+        self.load_state_dict(sd, strict=False)
+        print("Loaded Student weights.")
 def get_configs():
     import random
     import numpy as np
