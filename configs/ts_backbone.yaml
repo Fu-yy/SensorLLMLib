@@ -47,6 +47,7 @@ uschad:
   qua_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\uschad\20260116_102318_uschad_sensorllm\stage1\ckpts\vqvae_USCHAD_VQVAE_USCHAD_ftM_sl200_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   freq_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\uschad\20260116_115130_uschad_sensorllm\stage1\ckpts\vqvae_USCHAD_VQVAE_USCHAD_ftM_sl200_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   all_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\uschad\20260116_133730_uschad_sensorllm\stage1\ckpts\vqvae_USCHAD_VQVAE_USCHAD_ftM_sl200_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
+  alignment_path: 'D:\fuy\MyCode\SensorLLMLib_v2\runs\Alignment_Stage\uschad\Alignment_uschad_sensorllm\stage1\ckpts\alignment_USCHAD_Alignment_Stage_USCHAD_ftM_sl200_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
 ucihar:
   id2label:
         0: 'Walking'
@@ -77,7 +78,7 @@ ucihar:
   qua_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\ucihar\20260116_102318_ucihar_sensorllm\stage1\ckpts\vqvae_UCIHAR_VQVAE_UCIHAR_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   freq_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\ucihar\20260116_115130_ucihar_sensorllm\stage1\ckpts\vqvae_UCIHAR_VQVAE_UCIHAR_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   all_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\ucihar\20260116_133730_ucihar_sensorllm\stage1\ckpts\vqvae_UCIHAR_VQVAE_UCIHAR_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
-
+  alignment_path: 'D:\fuy\MyCode\SensorLLMLib_v2\runs\Alignment_Stage\ucihar\Alignment_ucihar_sensorllm\stage1\ckpts\alignment_UCIHAR_Alignment_Stage_UCIHAR_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
 mhealth:
   id2label:
     0: 'Standing still (1 min)'
@@ -148,7 +149,7 @@ mhealth:
   qua_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\mhealth\20260116_102318_mhealth_sensorllm\stage1\ckpts\vqvae_MHealth_VQVAE_MHealth_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   freq_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\mhealth\20260116_115130_mhealth_sensorllm\stage1\ckpts\vqvae_MHealth_VQVAE_MHealth_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   all_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\mhealth\20260116_133730_mhealth_sensorllm\stage1\ckpts\vqvae_MHealth_VQVAE_MHealth_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
-
+  alignment_path: 'D:\fuy\MyCode\SensorLLMLib_v2\runs\Alignment_Stage\mhealth\Alignment_mhealth_sensorllm\stage1\ckpts\alignment_MHealth_Alignment_Stage_MHealth_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
 
 pamap50:
   id2label:
@@ -228,7 +229,7 @@ pamap50:
   qua_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\pamap50\20260116_102318_pamap50_sensorllm\stage1\ckpts\vqvae_PAMAP2_VQVAE_PAMAP50_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   freq_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\pamap50\20260116_115130_pamap50_sensorllm\stage1\ckpts\vqvae_PAMAP2_VQVAE_PAMAP50_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   all_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\pamap50\20260116_133730_pamap50_sensorllm\stage1\ckpts\vqvae_PAMAP2_VQVAE_PAMAP50_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
-
+  alignment_path: 'D:\fuy\MyCode\SensorLLMLib_v2\runs\Alignment_Stage\pamap50\Alignment_pamap50_50hz_sensorllm\stage1\ckpts\alignment_PAMAP2_Alignment_Stage_PAMAP50_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
 
 pamap:
   id2label:
@@ -308,7 +309,7 @@ pamap:
   qua_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\pamap50\20260116_102318_pamap50_sensorllm\stage1\ckpts\vqvae_PAMAP2_VQVAE_PAMAP50_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   freq_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\pamap50\20260116_115130_pamap50_sensorllm\stage1\ckpts\vqvae_PAMAP2_VQVAE_PAMAP50_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   all_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\pamap50\20260116_133730_pamap50_sensorllm\stage1\ckpts\vqvae_PAMAP2_VQVAE_PAMAP50_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
-
+  alignment_path: 'D:\fuy\MyCode\SensorLLMLib_v2\runs\Alignment_Stage\pamap50\Alignment_pamap50_50hz_sensorllm\stage1\ckpts\alignment_PAMAP2_Alignment_Stage_PAMAP50_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
 
 capture24:
   id2label:
@@ -351,6 +352,7 @@ motionsense:
   qua_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\motionsense\20260116_102318_motionsense_sensorllm\stage1\ckpts\vqvae_MotionSense_VQVAE_MotionSense_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   freq_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\motionsense\20260116_115130_motionsense_sensorllm\stage1\ckpts\vqvae_MotionSense_VQVAE_MotionSense_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   all_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\motionsense\20260116_133730_motionsense_sensorllm\stage1\ckpts\vqvae_MotionSense_VQVAE_MotionSense_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
+  alignment_path: 'D:\fuy\MyCode\SensorLLMLib_v2\runs\Alignment_Stage\motionsense\Alignment_motionsense_sensorllm\stage1\ckpts\alignment_MotionSense_Alignment_Stage_MotionSense_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
 
 wisdm:
   id2label:
@@ -370,6 +372,7 @@ wisdm:
   qua_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\wisdm\20260116_102318_wisdm_sensorllm\stage1\ckpts\vqvae_WISDM_VQVAE_WISDM_ftM_sl80_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   freq_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\wisdm\20260116_115130_wisdm_sensorllm\stage1\ckpts\vqvae_WISDM_VQVAE_WISDM_ftM_sl80_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   all_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\wisdm\20260116_133730_wisdm_sensorllm\stage1\ckpts\vqvae_WISDM_VQVAE_WISDM_ftM_sl80_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
+  alignment_path: 'D:\fuy\MyCode\SensorLLMLib_v2\runs\Alignment_Stage\wisdm\Alignment_wisdm_sensorllm\stage1\ckpts\alignment_WISDM_Alignment_Stage_WISDM_ftM_sl80_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
 hhar:
   id2label:
     0: 'bike'
@@ -384,6 +387,8 @@ hhar:
   # alignment defaults (so experiments are reproducible)
   align_on: 'Arrival_Time'
   tol_sec: 0.05
+  alignment_path: 'D:\fuy\MyCode\SensorLLMLib_v2\runs\Alignment_Stage\hhar_1user\Alignment_hhar_1user_sensorllm\stage1\ckpts\alignment_HHAR_1user_Alignment_Stage_HHAR_1user_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
+
 hhar_1user:
   id2label:
     0: 'bike'
@@ -405,7 +410,7 @@ hhar_1user:
   qua_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\hhar_1user\20260116_102318_hhar_1user_sensorllm\stage1\ckpts\vqvae_HHAR_1user_VQVAE_HHAR_1user_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   freq_recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\hhar_1user\20260116_115130_hhar_1user_sensorllm\stage1\ckpts\vqvae_HHAR_1user_VQVAE_HHAR_1user_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   all_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\hhar_1user\20260116_133730_hhar_1user_sensorllm\stage1\ckpts\vqvae_HHAR_1user_VQVAE_HHAR_1user_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
-
+  alignment_path: 'D:\fuy\MyCode\SensorLLMLib_v2\runs\Alignment_Stage\hhar_1user\Alignment_hhar_1user_sensorllm\stage1\ckpts\alignment_HHAR_1user_Alignment_Stage_HHAR_1user_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
 hhar_cross_user:
   id2label:
     0: 'bike'
@@ -420,3 +425,5 @@ hhar_cross_user:
   # alignment defaults (so experiments are reproducible)
   align_on: 'Arrival_Time'
   tol_sec: 0.05
+  alignment_path: 'D:\fuy\MyCode\SensorLLMLib_v2\runs\Alignment_Stage\hhar_1user\Alignment_hhar_1user_sensorllm\stage1\ckpts\alignment_HHAR_1user_Alignment_Stage_HHAR_1user_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
+

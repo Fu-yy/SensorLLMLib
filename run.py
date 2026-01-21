@@ -2,6 +2,8 @@ import argparse
 import os
 import torch
 import torch.backends
+
+from exp.exp_alignment_class import Exp_Alignment_Classification
 from exp.exp_long_term_forecasting import Exp_Long_Term_Forecast
 from exp.exp_imputation import Exp_Imputation
 from exp.exp_short_term_forecasting import Exp_Short_Term_Forecast
@@ -52,7 +54,7 @@ if __name__ == '__main__':
     parser.add_argument('--inverse', action='store_true', help='inverse output datasets', default=False)
 
     # inputation task
-    parser.add_argument('--mask_rate', type=float, default=0.25, help='mask ratio')
+    parser.add_argument('--mask_rate', type=float, default=0.4, help='mask ratio')
 
     # anomaly detection task
     parser.add_argument('--anomaly_ratio', type=float, default=0.25, help='prior anomaly ratio (%%)')
@@ -93,7 +95,7 @@ if __name__ == '__main__':
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=10, help='datasets loader num workers')
-    parser.add_argument('--itr', type=int, default=5, help='experiments times')
+    parser.add_argument('--itr', type=int, default=3, help='experiments times')
     parser.add_argument('--train_epochs', type=int, default=10, help='train epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input datasets')
     parser.add_argument('--patience', type=int, default=3, help='early stopping patience')
@@ -207,7 +209,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    if args.model=="SensorLLMFuy_test_withllm_mae_vqvae" or args.model == "VQVAE" or args.model == "SensorLLMFuy" or args.model == "SensorLLMFuy_202512301643_backmodel_randommask" or args.model == "SensorLLMFuy_batch_20251231_163911" or args.model == "SensorLLMFuy_batch_20251231_164145" or args.model == "SensorLLMFuy_test" or args.model == "SensorLLMFuy_batch_20251231_164145_new" or args.model == "SensorLLMFuy_test_nollm_mae" or args.model == "SensorLLMFuy_test_nollm_contri" or args.model == "SensorLLMFuy_test_withllm_mae":
+    if args.model=="SensorLLMFuy_test_withllm_mae_vqvae_with_alignment" or args.model=="Alignment_Stage" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae" or args.model == "VQVAE" or args.model == "SensorLLMFuy" or args.model == "SensorLLMFuy_202512301643_backmodel_randommask" or args.model == "SensorLLMFuy_batch_20251231_163911" or args.model == "SensorLLMFuy_batch_20251231_164145" or args.model == "SensorLLMFuy_test" or args.model == "SensorLLMFuy_batch_20251231_164145_new" or args.model == "SensorLLMFuy_test_nollm_mae" or args.model == "SensorLLMFuy_test_nollm_contri" or args.model == "SensorLLMFuy_test_withllm_mae":
         args.two_stage = 1
     else:
         args.two_stage = 0
@@ -239,6 +241,8 @@ if __name__ == '__main__':
         Exp = Exp_Imputation
     elif args.task_name == 'anomaly_detection':
         Exp = Exp_Anomaly_Detection
+    elif args.task_name == 'alignment':
+        Exp = Exp_Alignment_Classification
     elif args.task_name == 'vqvae':
         Exp = Exp_VQ_VAE_Classification
     elif args.task_name == 'classification':

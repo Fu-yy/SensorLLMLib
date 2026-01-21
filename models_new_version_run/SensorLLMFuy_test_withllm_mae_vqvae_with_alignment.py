@@ -9,111 +9,6 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from models_new_version_run.VQ_VAE import IMU_VQ_Model
 
-'''
-改进：2026年1月19日
-
-这是一个非常深入的技术问题。我会先回答你关于 **UbiPhysio** 论文逻辑的疑问，然后针对你提供的**教师-学生蒸馏架构（Teacher-Student Distillation）**代码给出改进建议。
-
-### 一、 回答你的疑问：UbiPhysio 是怎么做的？
-
-**1. UbiPhysio 的做法（Discrete Seq2Seq）：**
-UbiPhysio 确实是先通过 VQ-VAE 得到离散词表（Codebook Indices），然后**把这些索引当成“单词”**。
-
-* 它们将索引  直接放入 Prompt 字符串中（例如：`"tokens: 12 45 8 99..."`）。
-* 然后输入到一个标准的 **Seq2Seq LLM**（如 T5 或 LLaMA）进行微调。
-* **本质：** 它走的是 **“离散映射”** 路线。LLM 并没有在向量层面与 VQ 空间对齐，而是通过微调学习了“数字序列  代表某种动作描述”的映射关系。
-
-**2. 你的做法（Feature Alignment / Distillation）：**
-你的代码走的是 **“特征对齐/蒸馏”** 路线。
-
-* 你通过 `projector` 将 VQ 向量映射到 LLM 的隐藏层空间。
-* 你的 Teacher 输出的是 `semantic_features`（连续向量），让 Student 去逼近这些向量。
-* **评价：** 你的方案在学术上更接近 **BEiT** 或 **Distill-BERT** 的逻辑。相比 UbiPhysio，这种做法理论上能保留更细粒度的传感器语义，因为你是在 **连续向量空间** 蒸馏知识，而不是仅仅在离散符号上做翻译。
-
----
-
-### 二、 代码改进方案建议
-
-你的代码结构已经非常完整（考虑了 Stride 对齐、Padding Mask 和投影层），但在“蒸馏效能”和“传感器特性”上还有以下改进空间：
-
-#### 1. 改进掩码策略：从“随机掩码”到“块掩码 (Block Masking)”
-
-传感器数据（IMU）在时间上具有极强的连续性。
-
-* **当前问题：** `random_masking` (0.4) 会随机挖掉单个点。由于邻近点非常相似，Student 模型很容易通过插值“偷懒”猜出答案，而学不到高层语义。
-* **建议：** 使用 **Block Masking**（连续挖掉一小段，例如连续 5-10 个 Patch）。这迫使模型根据上下文的运动趋势来恢复语义，能显著提升表征能力。
-
-#### 2. 增强 Teacher 的“上下文”能力
-
-* **当前问题：** 你的 `SoftLlamaTeacher` 的 `forward` 仅仅跑了一个 `projector(vq_embeds)`。
-```python
-semantic_features = self.projector(vq_embeds) 
-
-```
-
-
-这只是**静态特征转换**。它并没有发挥 LLM 的 **Transformer 序列建模** 能力。
-* **建议：** 既然你加载了整个 Llama 模型，应该让数据流过 Llama 的前几层。
-* **做法：** 将 `semantic_features` 拼上 `system_prompt`，输入 LLM 跑 1-2 层（Frozen），取其 Hidden States 作为蒸馏目标。这样 Student 学到的是“经过 LLM 上下文处理后”的语义，而不仅仅是单点的向量对齐。
-
-
-
-#### 3. 引入“温度因子 (Temperature)”与特征归一化
-
-* **当前问题：** Student 特征和 Teacher 特征（LLM 空间）的量级（Magnitude）可能完全不同。直接计算 MSE 会导致 Loss 极难收敛或梯度爆炸。
-* **建议：** 在计算 `loss_distill` 之前，对两个特征进行 **LayerNorm** 或使用 **余弦相似度损失 (Cosine Similarity Loss)** 代替 MSE。
-```python
-# 改进方案
-loss_distill = 1 - F.cosine_similarity(student_mask_feat, teacher_mask_feat, dim=-1).mean()
-
-```
-
-
-
-#### 4. 分类器阶段 (Stage 2) 的 Pooling 策略
-
-* **当前问题：** 你使用了 `global_feat = feat_valid.mean(dim=1)`。
-* **建议：** 对于动作识别，`Mean Pooling` 会抹平运动的时间特征。
-* **方案 A：** 在 Stage 1 引入一个 `[CLS]` Token，Stage 2 只取 `[CLS]` 的输出。
-* **方案 B：** 使用 `Attention Pooling` (通过一个可学习的 Query 聚合所有 Patch 的信息)。
-
-
-
-#### 5. 增加“对比学习”辅助 Loss (Optional)
-
-* **建议：** 在 Stage 1，除了 MSE 蒸馏，可以加一个简单的 **Contrastive Loss (如 InfoNCE)**。让 Student 模型确保“当前 Patch 的特征”与“Teacher 对应的 Patch 特征”最近，而与其他 Patch 远。这能极大增强特征的辨别力。
-
----
-
-### 三、 总结建议的修改点 (代码逻辑)
-
-```python
-# 建议在 Teacher forward 中增加上下文感知
-def forward(self, gt_ids):
-    safe_ids = gt_ids.clamp(0, self.num_vq_codes - 1)
-    vq_embeds = F.embedding(safe_ids, self.codebook) 
-    soft_embeds = self.projector(vq_embeds) # [B, T, llm_dim]
-
-    # 改进：如果显存允许，通过 LLM 跑一圈获得上下文语义
-    # combined_embeds = torch.cat([self.prompt_embeds.expand(B,-1,-1), soft_embeds], dim=1)
-    # with torch.no_grad():
-    #     outputs = self.llm(inputs_embeds=combined_embeds, output_hidden_states=True)
-    #     # 取最后一层 Hidden State 中对应 Sensor 的部分
-    #     semantic_features = outputs.hidden_states[-1][:, self.prompt_input_ids.shape[1]:] 
-
-    return soft_embeds # 或者返回增强后的 semantic_features
-
-```
-
-**你的方案相比 UbiPhysio 的优势：**
-你的架构更像是一个 **“传感器语言模型”的预训练过程**。如果你能完成 `Student -> Projector -> LLM` 的闭环，你的模型不仅能做分类（Stage 2），未来甚至可以像 GPT 插件一样，直接插在 LLM 上，让 LLM 直接“看见”原始传感器数据。
-
-你的逻辑是非常前沿的（基于特征蒸馏的传感器表征学习），建议重点优化 **Masking 策略** 和 **特征对齐的 Loss 函数**。
-
-
-
-'''
-
 # 禁用 fused attention，避免 _efficient_attention_backward invalid argument
 torch.backends.cuda.enable_flash_sdp(False)
 torch.backends.cuda.enable_mem_efficient_sdp(False)
@@ -418,56 +313,95 @@ class SoftLlamaTeacher(nn.Module):
         self.prompt_input_ids = self.tokenizer(self.system_prompt, return_tensors="pt").input_ids.to(device)
         with torch.no_grad():
             self.prompt_embeds = self.llm.get_input_embeddings()(self.prompt_input_ids)
-        # === 新增：加载对齐后的权重 ===
         if adapter_path is not None and os.path.exists(adapter_path):
             print(f"[Teacher] Loading Aligned Adapters from {adapter_path}")
-            checkpoint = torch.load(adapter_path, map_location=device)
+            checkpoint = torch.load(adapter_path, map_location="cpu")
 
-            # 加载 projector
-            self.projector.load_state_dict(checkpoint['projector'])
+            # --- 兼容性处理开始 ---
+            # 1. 如果是 Model Wrapper 保存的 (checkpoint['state_dict'] 或 checkpoint['model'])
+            if "state_dict" in checkpoint:
+                checkpoint = checkpoint["state_dict"]
+            elif "model" in checkpoint:
+                checkpoint = checkpoint["model"]
 
-            # 加载 output_head
-            self.output_head.load_state_dict(checkpoint['output_head'])
+            # 2. 尝试按照 "嵌套字典" (情况 A) 加载 -> 最可能是这个！
+            if 'projector' in checkpoint and isinstance(checkpoint['projector'], dict):
+                print("[Teacher] Detected nested checkpoint format (Dict of StateDicts).")
+                self.projector.load_state_dict(checkpoint['projector'], strict=True)
+                print(f"[Teacher] Projector loaded successfully.")
 
-            # 极其重要：加载后冻结它们！
-            # 在蒸馏阶段，Teacher 应该是全冻结的（包括 Adapter）
-            # 除非你想在蒸馏时继续微调 Teacher (通常不建议)
+                if 'output_head' in checkpoint:
+                    self.output_head.load_state_dict(checkpoint['output_head'], strict=True)
+                    print(f"[Teacher] Output Head loaded successfully.")
+
+            # 3. 如果不是嵌套，则尝试按照 "扁平字典" (情况 B) 加载
+            else:
+                print("[Teacher] Detected flat checkpoint format (Full StateDict).")
+                projector_dict = {}
+                output_head_dict = {}
+                for key, value in checkpoint.items():
+                    if key.startswith("projector."):
+                        projector_dict[key[10:]] = value  # 去掉 "projector."
+                    elif key.startswith("output_head."):
+                        output_head_dict[key[12:]] = value  # 去掉 "output_head."
+
+                if len(projector_dict) > 0:
+                    self.projector.load_state_dict(projector_dict, strict=True)
+                    print(f"[Teacher] Projector loaded from flat dict.")
+                if len(output_head_dict) > 0:
+                    self.output_head.load_state_dict(output_head_dict, strict=True)
+                    print(f"[Teacher] Output Head loaded from flat dict.")
+            # --- 兼容性处理结束 ---
+
+            # [Critical] 蒸馏阶段全冻结
             for p in self.projector.parameters(): p.requires_grad = False
             for p in self.output_head.parameters(): p.requires_grad = False
+            print("[Teacher] All parameters frozen for distillation.")
+
         else:
-            print("[Teacher] WARNING: No adapter weights loaded! Initializing randomly (BAD for Distillation).")
+            print("[Teacher] WARNING: No adapter weights loaded! Initializing randomly (BAD).")
 
-    def forward(self, masked_ids):
-        B, T = masked_ids.shape
-        is_mask = (masked_ids == self.mask_token_id)
+    def forward(self, gt_ids):
+        """
+        [Contextualized Feature Distillation Forward]
+        输入: GT Token IDs (完整序列)
+        输出: LLM 经过深层推理后的 Contextualized Hidden States
+        """
+        # 1. 基础映射 (Static Mapping)
+        # gt_ids: [B, T]
+        safe_ids = gt_ids.clamp(0, self.num_vq_codes - 1)
+        vq_embeds = F.embedding(safe_ids, self.codebook) # [B, T, vq_dim]
 
-        safe_ids = masked_ids.clone()
-        safe_ids[is_mask] = 0
-        safe_ids = safe_ids.clamp(0, self.num_vq_codes - 1)
+        # Projector 映射到 LLM 输入空间
+        input_embeds = self.projector(vq_embeds) # [B, T, llm_dim]
 
-        vq_embeds = F.embedding(safe_ids, self.codebook)
-        sensor_embeds = self.projector(vq_embeds)
-
-        expanded_mask = self.mask_embed_llama.expand(B, T, -1)
-        mask_broadcast = is_mask.unsqueeze(-1).float()
-        final_sensor_embeds = sensor_embeds * (1 - mask_broadcast) + expanded_mask * mask_broadcast
-
+        # 2. 加上 System Prompt (Contextualization 的关键)
+        # 必须加上 Prompt，因为 LLM 的推理是基于 Prompt 设定的语境 ("Analyze sensor...")
+        B = gt_ids.shape[0]
         batch_prompt = self.prompt_embeds.expand(B, -1, -1)
-        inputs_embeds = torch.cat([batch_prompt, final_sensor_embeds], dim=1).to(self.llm.dtype)
 
-        outputs = self.llm(inputs_embeds=inputs_embeds, output_hidden_states=True)
-        last_hidden = outputs.hidden_states[-1]
+        # 拼接: [Prompt, Sensor_Sequence]
+        full_inputs_embeds = torch.cat([batch_prompt, input_embeds], dim=1).to(self.llm.dtype)
 
+        # 3. LLM Forward (Dynamic Reasoning)
+        # 这里是核心区别！我们让 LLM 跑一遍 Inference
+        with torch.no_grad():
+            outputs = self.llm(
+                inputs_embeds=full_inputs_embeds,
+                output_hidden_states=True,
+                return_dict=True
+            )
+
+        # 4. 提取最后一层的 Hidden State
+        # last_hidden_state: [B, L_prompt + T, llm_dim]
+        # 这个向量包含了上下文信息（因为经过了 Self-Attention）
+        full_hidden = outputs.hidden_states[-1]
+        # 5. 切片 (Slicing)
+        # 去掉 Prompt 部分，只拿 Sensor 对应的部分作为 Target
         L_text = batch_prompt.shape[1]
-        sensor_features = last_hidden[:, L_text:, :]
+        sensor_contextualized_feat = full_hidden[:, L_text:, :] # [B, T, llm_dim]
 
-        logits = self.output_head(sensor_features.to(torch.float32))
-        probs = F.softmax(logits, dim=-1)
-
-        class TeacherOut:
-            def __init__(self, probs): self.probs = probs
-
-        return TeacherOut(probs)
+        return sensor_contextualized_feat
 
 
 # ==============================================================================
@@ -598,6 +532,7 @@ class Model(nn.Module):
 
         vqvae_path = getattr(args, "vqvae_path", None)
         self.qua_path = self.ds_cfg.get(vqvae_path, None)
+        alignment_path = self.ds_cfg.get("alignment_path", None)
 
         if self.qua_path is not None:
             vq_net_state_dict = torch.load(self.qua_path + os.sep + "best_wrapper.pth", map_location='cpu')
@@ -609,6 +544,7 @@ class Model(nn.Module):
             # set vq net requires_grad to False
             for param in self.vq_net.parameters():
                 param.requires_grad = False
+            print("vq_net Weight loaded Successfully")
             # --------------------------------------------
         # --- 2. Calculate Alignment (Critical) ---
         # VQ Stride = stride_t ^ down_t (e.g., 2^3 = 8)
@@ -637,9 +573,9 @@ class Model(nn.Module):
             nhead=4,
             num_layers=4
         ).to(self.device)
-        self.mask_rate=args.mask_rate
-        # --- 4. Initialize Teacher 2 (SoftLlama) ---
-        self.lambda_distill = float(getattr(args, "lambda_distill", 1))
+
+        # --- 4. Initialize Teacher & Distill Projector ---
+        self.lambda_distill = float(getattr(args, "lambda_distill", 1.0))  # 建议设为 1.0 或 2.0
         self.teacher = None
 
         if self.stage == 1 and hasattr(args, 'llama_name'):
@@ -652,9 +588,7 @@ class Model(nn.Module):
                     codebook_weights = self.vq_net.quantizer.codebook.data.cpu()
             else:
                 codebook_weights = self.vq_net.quantizer.codebook.data.cpu()
-            alignment_path = self.ds_cfg.get("alignment_path", None)
             adapter_path = alignment_path+ os.sep + "best_wrapper.pth"
-            adapter_path = None
             self.teacher = SoftLlamaTeacher(
                 llm_path=args.llama_name,
                 adapter_path=adapter_path,
@@ -662,6 +596,11 @@ class Model(nn.Module):
                 mask_token_id=self.mask_token_id,
                 device=self.device
             )
+            # [Critical Change 3] 新增: Student -> Teacher 维度的映射层
+            # 因为 Student dim (e.g. 256) != LLM dim (e.g. 2048)
+            # 我们需要把 Student 的特征投影上去，计算 MSE
+            self.distill_projector = nn.Linear(self.dim_student, self.teacher.llm_dim).to(self.device)
+            nn.init.xavier_normal_(self.distill_projector.weight)
 
         # --- 5. Classifier (Stage 2) ---
         if self.stage == 2:
@@ -672,16 +611,6 @@ class Model(nn.Module):
                 nn.Linear(self.dim_student, self.num_class)
             )
 
-    def _load_vq_weights(self, args):
-        vqvae_path = getattr(args, "vqvae_path", None)
-        if hasattr(self, 'ds_cfg'):
-            self.qua_path = self.ds_cfg.get(vqvae_path, None)
-        if hasattr(self, 'qua_path') and self.qua_path:
-            # Load logic specific to your checkpoint format
-            # ckpt = torch.load(...)
-            # self.vq_net.load_state_dict(...)
-            print(f"[Model] Loading VQ Weights from {self.qua_path} (Simulated)")
-            pass
 
     def random_masking(self, B, P, mask_ratio):
         noise = torch.rand(B, P, device=self.device)
@@ -713,29 +642,19 @@ class Model(nn.Module):
         # ====================
         if self.stage == 1:
             with torch.no_grad():
-                # VQ-VAE 的 get_token_ids 必须接收 Pad 后的数据
-                # 如果你的 VQ-VAE 内部没有自动 Pad，这里传 x_pad 是最安全的
                 gt_ids = self.vq_net.get_token_ids(x_pad)
+                if gt_ids.shape[1] > self.P: gt_ids = gt_ids[:, :self.P]
 
-                # 安全断言：确保 VQ 输出的 Token 数与 Student 的 Patch 数对齐
-            if gt_ids.shape[1] != self.P:
-                # 容错：如果 VQ 内部处理导致稍微多了点，强行截断对齐
-                if gt_ids.shape[1] > self.P:
-                    gt_ids = gt_ids[:, :self.P]
-                else:
-                    raise ValueError(f"VQ Tokens {gt_ids.shape[1]} < Student Patches {self.P}")
-
-            # 生成 Masking (BEiT 任务)
-            mask_bool = self.random_masking(x_pad.size(0), self.P, self.mask_rate)
-            # mask_bool = self.random_masking(x_pad.size(0), self.P, 0.4)
+            # Masking
+            mask_bool = self.random_masking(x_pad.size(0), self.P, 0.4)
 
             # Student Forward
-            student_logits, _ = self.student(x_pad, mask_bool)  # [B, P, K]
+            # student_logits: [B, P, K] (用于重建 Loss)
+            # student_feat:   [B, P, dim_student] (用于蒸馏 Loss)
+            student_logits, student_feat = self.student(x_pad, mask_bool)
 
-            # --- Calculation with Loss Mask ---
-            # 只有 (被 Mask 的位置) AND (不是 Padding 的位置) 才计算 Loss
+            # --- 1. Reconstruction Loss (CE) ---
             final_mask = mask_bool & loss_valid_mask
-
             target_masked = gt_ids[final_mask]
             pred_masked = student_logits[final_mask]
 
@@ -744,20 +663,28 @@ class Model(nn.Module):
             else:
                 loss_recon = torch.tensor(0.0, device=self.device, requires_grad=True)
 
-            # Distill Loss
-            loss_distill = torch.tensor(0.0, device=self.device)
+            # --- 2. Feature Distillation Loss (MSE) ---
+            loss_distill = torch.tensor(0.0, device=self.device, requires_grad=True)
+
             if self.teacher is not None and self.lambda_distill > 0:
-                teacher_input_ids = gt_ids.clone()
-                teacher_input_ids[mask_bool] = self.mask_token_id
+                with torch.no_grad():
+                    # Teacher 接收完整的 GT IDs，生成“正确”的语义特征
+                    # [B, P, llm_dim]
+                    teacher_targets = self.teacher(gt_ids)
 
-                teacher_out = self.teacher(teacher_input_ids)
+                    # Student 特征投影到 LLM 维度
+                # [B, P, llm_dim]
+                student_projected = self.distill_projector(student_feat)
 
-                s_log_probs = F.log_softmax(student_logits[final_mask], dim=-1)
-                t_probs = teacher_out.probs[final_mask].detach()
+                # 计算 MSE Loss (只计算 Mask 部分 或者 全局计算)
+                # 推荐：只计算 Mask 部分，让 Student 专注恢复丢失的语义
+                student_mask_feat = student_projected[final_mask]
+                teacher_mask_feat = teacher_targets[final_mask]
 
-                if s_log_probs.numel() > 0:
-                    loss_distill = F.kl_div(s_log_probs, t_probs, reduction='batchmean')
+                if student_mask_feat.numel() > 0:
+                    loss_distill = F.mse_loss(student_mask_feat, teacher_mask_feat)
 
+            # Total Loss
             loss_total = loss_recon + self.lambda_distill * loss_distill
 
             return loss_total, student_logits, {
@@ -765,10 +692,6 @@ class Model(nn.Module):
                 "loss_distill": loss_distill.item(),
                 "loss_total": loss_total.item()
             }
-
-        # ====================
-        # Stage 2: Classify
-        # ====================
         elif self.stage == 2:
             # Student Forward
             _, feat = self.student(x_pad, mask_bool=None)  # [B, P, D]

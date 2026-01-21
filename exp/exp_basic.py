@@ -12,7 +12,7 @@ from models import Autoformer, Transformer, TimesNet, Nonstationary_Transformer,
     WPMixer, MultiPatchFormer, KANAD, MSGNet, TimeFilter, Sundial, TimeMoE, SensorLLMFuy
 from models_new_version_run import SensorLLMFuy_202512301643_backmodel_randommask, SensorLLMFuy_batch_20251231_163911, \
     SensorLLMFuy_batch_20251231_164145, SensorLLMFuy_test, SensorLLMFuy_test_withllm_mae, VQ_VAE, \
-    SensorLLMFuy_test_withllm_mae_vqvae
+    SensorLLMFuy_test_withllm_mae_vqvae, Alignment_Stage, SensorLLMFuy_test_withllm_mae_vqvae_with_alignment
 
 
 class Exp_Basic(object):
@@ -64,6 +64,8 @@ class Exp_Basic(object):
             # 'SensorLLMFuy_test_nollm_mae':SensorLLMFuy_test_nollm_mae,
             'SensorLLMFuy_test_withllm_mae':SensorLLMFuy_test_withllm_mae,
             'SensorLLMFuy_test_withllm_mae_vqvae':SensorLLMFuy_test_withllm_mae_vqvae,
+            'Alignment_Stage':Alignment_Stage,
+            'SensorLLMFuy_test_withllm_mae_vqvae_with_alignment':SensorLLMFuy_test_withllm_mae_vqvae_with_alignment,
 
             # 'Chronos': Chronos,
             # 'Moirai': Moirai,

@@ -175,16 +175,16 @@ def process_logs(root_folder, output_excel):
 if __name__ == "__main__":
     # ================= 配置区域 =================
 
-    ROOT_DIRECTORY = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260117_203201"
-    OUTPUT_FILE = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260117_203201_experiment_results.xlsx"
 
-    ROOT_DIRECTORY_02 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260117_210057"
-    OUTPUT_FILE_02 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260117_210057_experiment_results.xlsx"
+
+
+    ROOT_DIRECTORY = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260120_194435"
+    OUTPUT_FILE = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260120_194435_experiment_results.xlsx"
+
+    # ROOT_DIRECTORY_02 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260117_210057"
+    # OUTPUT_FILE_02 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260117_210057_experiment_results.xlsx"
 
     # ===========================================
 
     if os.path.exists(ROOT_DIRECTORY):
         process_logs(ROOT_DIRECTORY, OUTPUT_FILE)
-
-    if os.path.exists(ROOT_DIRECTORY_02):
-        process_logs(ROOT_DIRECTORY_02, OUTPUT_FILE_02)

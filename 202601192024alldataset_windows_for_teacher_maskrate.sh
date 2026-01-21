@@ -6,9 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 
-LLAMA_NAME="/root/autodl-tmp/Llama-3.2-1B"
+LLAMA_NAME="D:\fuy\MyCode/Llama-3.2-1B"
 
-TS_BACNBONE_YAML="ts_backbone_linux.yaml"
+TS_BACNBONE_YAML="ts_backbone.yaml"
 #VQVAEPATH="qua_path"
 #for i in 1;do
 #
@@ -56,7 +56,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #
 #
 #echo "[1/7] Running UCIHAR..."
-#DATA_ROOT="/root/autodl-tmp/datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
 #DATA_KEY="ucihar"
 #DATA_NAME="UCIHAR"
 #RUN_ID="${GLOBAL_TIME_TAG}_ucihar_sensorllm"
@@ -69,7 +69,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #PATCH_LEN=64
 #BATCH_SIZE=32
 #LR=0.001
-#PRETRAIN_EPOCHS=10
+#PRETRAIN_EPOCHS=20
 #EPOCHS=8
 #
 #
@@ -83,7 +83,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -94,7 +94,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done UCIHAR."
@@ -113,7 +113,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #fi
 #
 #echo "[2/7] Running USC-HAD..."
-#DATA_ROOT="/root/autodl-tmp/datasets/USC-HAD/USC-HAD"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/USC-HAD/USC-HAD"
 #DATA_KEY="uschad"
 #DATA_NAME="USCHAD"
 #RUN_ID="${GLOBAL_TIME_TAG}_uschad_sensorllm"
@@ -138,7 +138,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -150,7 +150,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done USC-HAD."
@@ -170,7 +170,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #
 #
 #echo "[3/7] Running MHEALTH..."
-#DATA_ROOT="/root/autodl-tmp/datasets/MHEALTHDATASET"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/MHEALTHDATASET"
 #DATA_KEY="mhealth"
 #DATA_NAME="MHealth"
 #RUN_ID="${GLOBAL_TIME_TAG}_mhealth_sensorllm"
@@ -193,7 +193,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -205,7 +205,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done MHEALTH."
@@ -236,7 +236,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #
 #
 #echo "[4/7] Running PAMAP2 (50Hz)..."
-#DATA_ROOT="/root/autodl-tmp/datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
 #DATA_KEY="pamap50"
 #DATA_NAME="PAMAP50"
 #RUN_ID="${GLOBAL_TIME_TAG}_pamap50_50hz_sensorllm"
@@ -260,7 +260,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -272,7 +272,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done PAMAP50 (50Hz)."
@@ -299,7 +299,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #
 #
 #echo "[5/7] Running WISDM..."
-#DATA_ROOT="/root/autodl-tmp/datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
 #DATA_KEY="wisdm"
 #DATA_NAME="WISDM"
 #RUN_ID="${GLOBAL_TIME_TAG}_wisdm_sensorllm"
@@ -322,7 +322,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  --test_users 33,34,35,36 \
 #  --val_users 5,13,17,19,27,31 \
 #  --wisdm_norm none \
@@ -336,7 +336,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  --test_users 33,34,35,36 \
 #  --val_users 5,13,17,19,27,31 \
 #  --wisdm_norm none \
@@ -359,7 +359,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #fi
 #
 #echo "[6/7] Running HHAR_1user..."
-#DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
 #DATA_KEY="hhar"
 #DATA_NAME="HHAR_1user"
 #RUN_ID="${GLOBAL_TIME_TAG}_hhar_1user_sensorllm"
@@ -382,7 +382,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  --hhar_tol 0.05 \
 #  --hhar_align_on Arrival_Time \
 #  --hhar_use_cache 1 \
@@ -397,7 +397,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  --hhar_tol 0.05 \
 #  --hhar_align_on Arrival_Time \
 #  --hhar_use_cache 1 \
@@ -411,7 +411,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ## 3. HHAR_cross_user
 ## ========================================================
 ##echo "[3/4] Running HHAR_cross_user..."
-##DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
 ##DATA_KEY="hhar"
 ##DATA_NAME="HHAR_cross_user"
 ##RUN_ID="${GLOBAL_TIME_TAG}_hhar_cross_user_sensorllm"
@@ -434,7 +434,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -450,7 +450,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -475,7 +475,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #fi
 #
 #echo "[7/7] Running MotionSense..."
-#DATA_ROOT="/root/autodl-tmp/datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
 #DATA_KEY="motionsense"
 #DATA_NAME="MotionSense"
 #RUN_ID="${GLOBAL_TIME_TAG}_motionsense_sensorllm"
@@ -500,7 +500,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  --test_users 19,20,21,22,23,24 \
 #  --val_users 13,14,15,16,17,18 \
 #  --motionsense_feature_set A12 \
@@ -516,7 +516,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  --test_users 19,20,21,22,23,24 \
 #  --val_users 13,14,15,16,17,18 \
 #  --motionsense_feature_set A12 \
@@ -581,7 +581,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #
 #
 #echo "[1/7] Running UCIHAR..."
-#DATA_ROOT="/root/autodl-tmp/datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
 #DATA_KEY="ucihar"
 #DATA_NAME="UCIHAR"
 #RUN_ID="${GLOBAL_TIME_TAG}_ucihar_sensorllm"
@@ -594,7 +594,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #PATCH_LEN=64
 #BATCH_SIZE=32
 #LR=0.001
-#PRETRAIN_EPOCHS=10
+#PRETRAIN_EPOCHS=20
 #EPOCHS=8
 #
 #
@@ -608,7 +608,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -619,7 +619,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done UCIHAR."
@@ -638,7 +638,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #fi
 #
 #echo "[2/7] Running USC-HAD..."
-#DATA_ROOT="/root/autodl-tmp/datasets/USC-HAD/USC-HAD"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/USC-HAD/USC-HAD"
 #DATA_KEY="uschad"
 #DATA_NAME="USCHAD"
 #RUN_ID="${GLOBAL_TIME_TAG}_uschad_sensorllm"
@@ -663,7 +663,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -675,7 +675,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done USC-HAD."
@@ -695,7 +695,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##
 ##
 ##echo "[3/7] Running MHEALTH..."
-##DATA_ROOT="/root/autodl-tmp/datasets/MHEALTHDATASET"
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/MHEALTHDATASET"
 ##DATA_KEY="mhealth"
 ##DATA_NAME="MHealth"
 ##RUN_ID="${GLOBAL_TIME_TAG}_mhealth_sensorllm"
@@ -718,7 +718,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage1.log" 2>&1
 ##
 ### Stage 2
@@ -730,7 +730,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage2.log" 2>&1
 ##
 ##echo "Done MHEALTH."
@@ -761,7 +761,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##
 ##
 ##echo "[4/7] Running PAMAP2 (50Hz)..."
-##DATA_ROOT="/root/autodl-tmp/datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
 ##DATA_KEY="pamap50"
 ##DATA_NAME="PAMAP50"
 ##RUN_ID="${GLOBAL_TIME_TAG}_pamap50_50hz_sensorllm"
@@ -785,7 +785,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage1.log" 2>&1
 ##
 ### Stage 2
@@ -797,7 +797,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage2.log" 2>&1
 ##
 ##echo "Done PAMAP50 (50Hz)."
@@ -824,7 +824,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##
 ##
 ##echo "[5/7] Running WISDM..."
-##DATA_ROOT="/root/autodl-tmp/datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
 ##DATA_KEY="wisdm"
 ##DATA_NAME="WISDM"
 ##RUN_ID="${GLOBAL_TIME_TAG}_wisdm_sensorllm"
@@ -847,7 +847,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 33,34,35,36 \
 ##  --val_users 5,13,17,19,27,31 \
 ##  --wisdm_norm none \
@@ -861,7 +861,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 33,34,35,36 \
 ##  --val_users 5,13,17,19,27,31 \
 ##  --wisdm_norm none \
@@ -884,7 +884,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##fi
 ##
 ##echo "[6/7] Running HHAR_1user..."
-##DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
 ##DATA_KEY="hhar"
 ##DATA_NAME="HHAR_1user"
 ##RUN_ID="${GLOBAL_TIME_TAG}_hhar_1user_sensorllm"
@@ -907,7 +907,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -922,7 +922,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -936,7 +936,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ### 3. HHAR_cross_user
 ### ========================================================
 ###echo "[3/4] Running HHAR_cross_user..."
-###DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
+###DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
 ###DATA_KEY="hhar"
 ###DATA_NAME="HHAR_cross_user"
 ###RUN_ID="${GLOBAL_TIME_TAG}_hhar_cross_user_sensorllm"
@@ -959,7 +959,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ###  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ###  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ###  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-###  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+###  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ###  --hhar_tol 0.05 \
 ###  --hhar_align_on Arrival_Time \
 ###  --hhar_use_cache 1 \
@@ -975,7 +975,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ###  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ###  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ###  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-###  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+###  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ###  --hhar_tol 0.05 \
 ###  --hhar_align_on Arrival_Time \
 ###  --hhar_use_cache 1 \
@@ -1000,7 +1000,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##fi
 ##
 ##echo "[7/7] Running MotionSense..."
-##DATA_ROOT="/root/autodl-tmp/datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
 ##DATA_KEY="motionsense"
 ##DATA_NAME="MotionSense"
 ##RUN_ID="${GLOBAL_TIME_TAG}_motionsense_sensorllm"
@@ -1025,7 +1025,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 19,20,21,22,23,24 \
 ##  --val_users 13,14,15,16,17,18 \
 ##  --motionsense_feature_set A12 \
@@ -1041,7 +1041,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 19,20,21,22,23,24 \
 ##  --val_users 13,14,15,16,17,18 \
 ##  --motionsense_feature_set A12 \
@@ -1106,7 +1106,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #
 #
 #echo "[1/7] Running UCIHAR..."
-#DATA_ROOT="/root/autodl-tmp/datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
 #DATA_KEY="ucihar"
 #DATA_NAME="UCIHAR"
 #RUN_ID="${GLOBAL_TIME_TAG}_ucihar_sensorllm"
@@ -1119,7 +1119,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #PATCH_LEN=64
 #BATCH_SIZE=32
 #LR=0.001
-#PRETRAIN_EPOCHS=10
+#PRETRAIN_EPOCHS=20
 #EPOCHS=8
 #
 #
@@ -1133,7 +1133,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -1144,7 +1144,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done UCIHAR."
@@ -1163,7 +1163,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #fi
 #
 #echo "[2/7] Running USC-HAD..."
-#DATA_ROOT="/root/autodl-tmp/datasets/USC-HAD/USC-HAD"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/USC-HAD/USC-HAD"
 #DATA_KEY="uschad"
 #DATA_NAME="USCHAD"
 #RUN_ID="${GLOBAL_TIME_TAG}_uschad_sensorllm"
@@ -1188,7 +1188,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -1200,7 +1200,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done USC-HAD."
@@ -1220,7 +1220,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##
 ##
 ##echo "[3/7] Running MHEALTH..."
-##DATA_ROOT="/root/autodl-tmp/datasets/MHEALTHDATASET"
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/MHEALTHDATASET"
 ##DATA_KEY="mhealth"
 ##DATA_NAME="MHealth"
 ##RUN_ID="${GLOBAL_TIME_TAG}_mhealth_sensorllm"
@@ -1243,7 +1243,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage1.log" 2>&1
 ##
 ### Stage 2
@@ -1255,7 +1255,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage2.log" 2>&1
 ##
 ##echo "Done MHEALTH."
@@ -1286,7 +1286,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##
 ##
 ##echo "[4/7] Running PAMAP2 (50Hz)..."
-##DATA_ROOT="/root/autodl-tmp/datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
 ##DATA_KEY="pamap50"
 ##DATA_NAME="PAMAP50"
 ##RUN_ID="${GLOBAL_TIME_TAG}_pamap50_50hz_sensorllm"
@@ -1310,7 +1310,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage1.log" 2>&1
 ##
 ### Stage 2
@@ -1322,7 +1322,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage2.log" 2>&1
 ##
 ##echo "Done PAMAP50 (50Hz)."
@@ -1349,7 +1349,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##
 ##
 ##echo "[5/7] Running WISDM..."
-##DATA_ROOT="/root/autodl-tmp/datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
 ##DATA_KEY="wisdm"
 ##DATA_NAME="WISDM"
 ##RUN_ID="${GLOBAL_TIME_TAG}_wisdm_sensorllm"
@@ -1372,7 +1372,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 33,34,35,36 \
 ##  --val_users 5,13,17,19,27,31 \
 ##  --wisdm_norm none \
@@ -1386,7 +1386,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 33,34,35,36 \
 ##  --val_users 5,13,17,19,27,31 \
 ##  --wisdm_norm none \
@@ -1409,7 +1409,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##fi
 ##
 ##echo "[6/7] Running HHAR_1user..."
-##DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
 ##DATA_KEY="hhar"
 ##DATA_NAME="HHAR_1user"
 ##RUN_ID="${GLOBAL_TIME_TAG}_hhar_1user_sensorllm"
@@ -1432,7 +1432,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -1447,7 +1447,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -1461,7 +1461,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ### 3. HHAR_cross_user
 ### ========================================================
 ###echo "[3/4] Running HHAR_cross_user..."
-###DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
+###DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
 ###DATA_KEY="hhar"
 ###DATA_NAME="HHAR_cross_user"
 ###RUN_ID="${GLOBAL_TIME_TAG}_hhar_cross_user_sensorllm"
@@ -1484,7 +1484,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ###  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ###  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ###  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-###  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+###  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ###  --hhar_tol 0.05 \
 ###  --hhar_align_on Arrival_Time \
 ###  --hhar_use_cache 1 \
@@ -1500,7 +1500,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ###  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ###  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ###  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-###  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+###  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ###  --hhar_tol 0.05 \
 ###  --hhar_align_on Arrival_Time \
 ###  --hhar_use_cache 1 \
@@ -1525,7 +1525,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##fi
 ##
 ##echo "[7/7] Running MotionSense..."
-##DATA_ROOT="/root/autodl-tmp/datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
 ##DATA_KEY="motionsense"
 ##DATA_NAME="MotionSense"
 ##RUN_ID="${GLOBAL_TIME_TAG}_motionsense_sensorllm"
@@ -1550,7 +1550,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 19,20,21,22,23,24 \
 ##  --val_users 13,14,15,16,17,18 \
 ##  --motionsense_feature_set A12 \
@@ -1566,7 +1566,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 19,20,21,22,23,24 \
 ##  --val_users 13,14,15,16,17,18 \
 ##  --motionsense_feature_set A12 \
@@ -1631,7 +1631,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #
 #
 #echo "[1/7] Running UCIHAR..."
-#DATA_ROOT="/root/autodl-tmp/datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
 #DATA_KEY="ucihar"
 #DATA_NAME="UCIHAR"
 #RUN_ID="${GLOBAL_TIME_TAG}_ucihar_sensorllm"
@@ -1644,7 +1644,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #PATCH_LEN=64
 #BATCH_SIZE=32
 #LR=0.001
-#PRETRAIN_EPOCHS=10
+#PRETRAIN_EPOCHS=20
 #EPOCHS=8
 #
 #
@@ -1658,7 +1658,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -1669,7 +1669,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done UCIHAR."
@@ -1688,7 +1688,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #fi
 #
 #echo "[2/7] Running USC-HAD..."
-#DATA_ROOT="/root/autodl-tmp/datasets/USC-HAD/USC-HAD"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/USC-HAD/USC-HAD"
 #DATA_KEY="uschad"
 #DATA_NAME="USCHAD"
 #RUN_ID="${GLOBAL_TIME_TAG}_uschad_sensorllm"
@@ -1713,7 +1713,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -1725,7 +1725,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done USC-HAD."
@@ -1745,7 +1745,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##
 ##
 ##echo "[3/7] Running MHEALTH..."
-##DATA_ROOT="/root/autodl-tmp/datasets/MHEALTHDATASET"
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/MHEALTHDATASET"
 ##DATA_KEY="mhealth"
 ##DATA_NAME="MHealth"
 ##RUN_ID="${GLOBAL_TIME_TAG}_mhealth_sensorllm"
@@ -1768,7 +1768,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage1.log" 2>&1
 ##
 ### Stage 2
@@ -1780,7 +1780,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage2.log" 2>&1
 ##
 ##echo "Done MHEALTH."
@@ -1811,7 +1811,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##
 ##
 ##echo "[4/7] Running PAMAP2 (50Hz)..."
-##DATA_ROOT="/root/autodl-tmp/datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
 ##DATA_KEY="pamap50"
 ##DATA_NAME="PAMAP50"
 ##RUN_ID="${GLOBAL_TIME_TAG}_pamap50_50hz_sensorllm"
@@ -1835,7 +1835,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage1.log" 2>&1
 ##
 ### Stage 2
@@ -1847,7 +1847,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage2.log" 2>&1
 ##
 ##echo "Done PAMAP50 (50Hz)."
@@ -1874,7 +1874,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##
 ##
 ##echo "[5/7] Running WISDM..."
-##DATA_ROOT="/root/autodl-tmp/datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
 ##DATA_KEY="wisdm"
 ##DATA_NAME="WISDM"
 ##RUN_ID="${GLOBAL_TIME_TAG}_wisdm_sensorllm"
@@ -1897,7 +1897,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 33,34,35,36 \
 ##  --val_users 5,13,17,19,27,31 \
 ##  --wisdm_norm none \
@@ -1911,7 +1911,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 33,34,35,36 \
 ##  --val_users 5,13,17,19,27,31 \
 ##  --wisdm_norm none \
@@ -1934,7 +1934,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##fi
 ##
 ##echo "[6/7] Running HHAR_1user..."
-##DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
 ##DATA_KEY="hhar"
 ##DATA_NAME="HHAR_1user"
 ##RUN_ID="${GLOBAL_TIME_TAG}_hhar_1user_sensorllm"
@@ -1957,7 +1957,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -1972,7 +1972,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -1986,7 +1986,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ### 3. HHAR_cross_user
 ### ========================================================
 ###echo "[3/4] Running HHAR_cross_user..."
-###DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
+###DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
 ###DATA_KEY="hhar"
 ###DATA_NAME="HHAR_cross_user"
 ###RUN_ID="${GLOBAL_TIME_TAG}_hhar_cross_user_sensorllm"
@@ -2009,7 +2009,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ###  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ###  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ###  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-###  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+###  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ###  --hhar_tol 0.05 \
 ###  --hhar_align_on Arrival_Time \
 ###  --hhar_use_cache 1 \
@@ -2025,7 +2025,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ###  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ###  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ###  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-###  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+###  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ###  --hhar_tol 0.05 \
 ###  --hhar_align_on Arrival_Time \
 ###  --hhar_use_cache 1 \
@@ -2050,7 +2050,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##fi
 ##
 ##echo "[7/7] Running MotionSense..."
-##DATA_ROOT="/root/autodl-tmp/datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
 ##DATA_KEY="motionsense"
 ##DATA_NAME="MotionSense"
 ##RUN_ID="${GLOBAL_TIME_TAG}_motionsense_sensorllm"
@@ -2075,7 +2075,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 19,20,21,22,23,24 \
 ##  --val_users 13,14,15,16,17,18 \
 ##  --motionsense_feature_set A12 \
@@ -2091,7 +2091,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 19,20,21,22,23,24 \
 ##  --val_users 13,14,15,16,17,18 \
 ##  --motionsense_feature_set A12 \
@@ -2108,8 +2108,8 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #
 #done
 
-
-
+if false;then
+MASK_RATE=0.9
 VQVAEPATH="qua_recon_path"
 for i in 1;do
 
@@ -2157,7 +2157,7 @@ fi
 
 
 echo "[1/7] Running UCIHAR..."
-DATA_ROOT="/root/autodl-tmp/datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
 DATA_KEY="ucihar"
 DATA_NAME="UCIHAR"
 RUN_ID="${GLOBAL_TIME_TAG}_ucihar_sensorllm"
@@ -2170,7 +2170,7 @@ SEQ_LEN=128
 PATCH_LEN=64
 BATCH_SIZE=32
 LR=0.001
-PRETRAIN_EPOCHS=10
+PRETRAIN_EPOCHS=20
 EPOCHS=8
 
 
@@ -2184,7 +2184,7 @@ python -u run.py \
   --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
   --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   > "$LOG_DIR/stage1.log" 2>&1
 
 # Stage 2
@@ -2195,7 +2195,7 @@ python -u run.py \
   --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
   --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   > "$LOG_DIR/stage2.log" 2>&1
 
 echo "Done UCIHAR."
@@ -2214,7 +2214,7 @@ else
 fi
 
 echo "[2/7] Running USC-HAD..."
-DATA_ROOT="/root/autodl-tmp/datasets/USC-HAD/USC-HAD"
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/USC-HAD/USC-HAD"
 DATA_KEY="uschad"
 DATA_NAME="USCHAD"
 RUN_ID="${GLOBAL_TIME_TAG}_uschad_sensorllm"
@@ -2239,7 +2239,7 @@ python -u run.py \
   --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
   --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   > "$LOG_DIR/stage1.log" 2>&1
 
 # Stage 2
@@ -2251,7 +2251,7 @@ python -u run.py \
   --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
   --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   > "$LOG_DIR/stage2.log" 2>&1
 
 echo "Done USC-HAD."
@@ -2271,7 +2271,7 @@ fi
 
 
 echo "[3/7] Running MHEALTH..."
-DATA_ROOT="/root/autodl-tmp/datasets/MHEALTHDATASET"
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/MHEALTHDATASET"
 DATA_KEY="mhealth"
 DATA_NAME="MHealth"
 RUN_ID="${GLOBAL_TIME_TAG}_mhealth_sensorllm"
@@ -2294,7 +2294,7 @@ python -u run.py \
   --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
   --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   > "$LOG_DIR/stage1.log" 2>&1
 
 # Stage 2
@@ -2306,7 +2306,7 @@ python -u run.py \
   --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
   --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   > "$LOG_DIR/stage2.log" 2>&1
 
 echo "Done MHEALTH."
@@ -2337,7 +2337,7 @@ fi
 
 
 echo "[4/7] Running PAMAP2 (50Hz)..."
-DATA_ROOT="/root/autodl-tmp/datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
 DATA_KEY="pamap50"
 DATA_NAME="PAMAP50"
 RUN_ID="${GLOBAL_TIME_TAG}_pamap50_50hz_sensorllm"
@@ -2361,7 +2361,7 @@ python -u run.py \
   --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
   --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   > "$LOG_DIR/stage1.log" 2>&1
 
 # Stage 2
@@ -2373,7 +2373,7 @@ python -u run.py \
   --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
   --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   > "$LOG_DIR/stage2.log" 2>&1
 
 echo "Done PAMAP50 (50Hz)."
@@ -2400,7 +2400,7 @@ fi
 
 
 echo "[5/7] Running WISDM..."
-DATA_ROOT="/root/autodl-tmp/datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
 DATA_KEY="wisdm"
 DATA_NAME="WISDM"
 RUN_ID="${GLOBAL_TIME_TAG}_wisdm_sensorllm"
@@ -2414,7 +2414,7 @@ PATCH_LEN=40
 BATCH_SIZE=64
 LR=0.001
 EPOCHS=8
-
+#
 # Stage 1
 python -u run.py \
   --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
@@ -2423,7 +2423,7 @@ python -u run.py \
   --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
   --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   --test_users 33,34,35,36 \
   --val_users 5,13,17,19,27,31 \
   --wisdm_norm none \
@@ -2437,7 +2437,7 @@ python -u run.py \
   --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
   --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   --test_users 33,34,35,36 \
   --val_users 5,13,17,19,27,31 \
   --wisdm_norm none \
@@ -2460,7 +2460,7 @@ else
 fi
 
 echo "[6/7] Running HHAR_1user..."
-DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
 DATA_KEY="hhar"
 DATA_NAME="HHAR_1user"
 RUN_ID="${GLOBAL_TIME_TAG}_hhar_1user_sensorllm"
@@ -2483,7 +2483,7 @@ python -u run.py \
   --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
   --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   --hhar_tol 0.05 \
   --hhar_align_on Arrival_Time \
   --hhar_use_cache 1 \
@@ -2498,7 +2498,7 @@ python -u run.py \
   --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
   --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   --hhar_tol 0.05 \
   --hhar_align_on Arrival_Time \
   --hhar_use_cache 1 \
@@ -2512,7 +2512,7 @@ echo "Done HHAR_1user."
 # 3. HHAR_cross_user
 # ========================================================
 #echo "[3/4] Running HHAR_cross_user..."
-#DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
 #DATA_KEY="hhar"
 #DATA_NAME="HHAR_cross_user"
 #RUN_ID="${GLOBAL_TIME_TAG}_hhar_cross_user_sensorllm"
@@ -2535,7 +2535,7 @@ echo "Done HHAR_1user."
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  --hhar_tol 0.05 \
 #  --hhar_align_on Arrival_Time \
 #  --hhar_use_cache 1 \
@@ -2551,7 +2551,7 @@ echo "Done HHAR_1user."
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  --hhar_tol 0.05 \
 #  --hhar_align_on Arrival_Time \
 #  --hhar_use_cache 1 \
@@ -2576,7 +2576,7 @@ else
 fi
 
 echo "[7/7] Running MotionSense..."
-DATA_ROOT="/root/autodl-tmp/datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
 DATA_KEY="motionsense"
 DATA_NAME="MotionSense"
 RUN_ID="${GLOBAL_TIME_TAG}_motionsense_sensorllm"
@@ -2601,7 +2601,7 @@ python -u run.py \
   --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
   --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   --test_users 19,20,21,22,23,24 \
   --val_users 13,14,15,16,17,18 \
   --motionsense_feature_set A12 \
@@ -2617,7 +2617,533 @@ python -u run.py \
   --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
   --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
   --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --test_users 19,20,21,22,23,24 \
+  --val_users 13,14,15,16,17,18 \
+  --motionsense_feature_set A12 \
+  --motionsense_combine_grav_acc 0 \
+  --motionsense_norm none \
+  > "$LOG_DIR/stage2.log" 2>&1
+
+echo "Done MotionSense."
+
+echo "========================================================"
+echo "ALL DONE. Logs at: $GLOBAL_LOG_ROOT"
+echo "========================================================"
+
+
+done
+fi
+
+MASK_RATE=0.75
+VQVAEPATH="qua_recon_path"
+for i in 1;do
+
+
+
+# 生成一个全局时间标签，这样这一次批量运行的所有日志都在同一个大目录下
+GLOBAL_TIME_TAG=$(date +"%Y%m%d_%H%M%S")
+GLOBAL_LOG_ROOT="./run_log/batch_${GLOBAL_TIME_TAG}"
+mkdir -p "$GLOBAL_LOG_ROOT"
+
+echo "========================================================"
+echo "Starting Batch Training Run: $GLOBAL_TIME_TAG"
+echo "Logs will be saved to: $GLOBAL_LOG_ROOT"
+echo "========================================================"
+
+model_name=SensorLLMFuy_test_withllm_mae_vqvae
+PRETRAIN_trainable_modules="patch_embed,resampler,mae_decoder"
+TRAIN_trainable_modules="patch_embed,resampler,llm_proj,cls_head"
+
+
+
+
+
+
+
+
+# ========================================================
+# 1. UCIHAR
+# ========================================================
+
+
+TARGET_DIR="/root/autodl-tmp/SensorLLMLib_v2"
+
+if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
+    find "$TARGET_DIR" -type f \( -name "*.npy" -o -name "*.pth" \) -delete
+    echo "已删除 $TARGET_DIR 下所有 .npy 和 .pth 文件"
+else
+    echo "错误：目录不存在或变量为空，跳过删除"
+fi
+
+
+
+
+
+
+
+echo "[1/7] Running UCIHAR..."
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
+DATA_KEY="ucihar"
+DATA_NAME="UCIHAR"
+RUN_ID="${GLOBAL_TIME_TAG}_ucihar_sensorllm"
+LOG_DIR="$GLOBAL_LOG_ROOT/ucihar"
+mkdir -p "$LOG_DIR"
+
+# Settings
+ALIGN_W_MAX=200
+SEQ_LEN=128
+PATCH_LEN=64
+BATCH_SIZE=32
+LR=0.001
+PRETRAIN_EPOCHS=20
+EPOCHS=8
+
+
+
+
+# Stage 1
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id UCIHAR --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
+  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  > "$LOG_DIR/stage1.log" 2>&1
+
+# Stage 2
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id UCIHAR --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
+  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  > "$LOG_DIR/stage2.log" 2>&1
+
+echo "Done UCIHAR."
+
+# ========================================================
+# 2. USC-HAD
+# ========================================================
+
+TARGET_DIR="/root/autodl-tmp/SensorLLMLib_v2"
+
+if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
+    find "$TARGET_DIR" -type f \( -name "*.npy" -o -name "*.pth" \) -delete
+    echo "已删除 $TARGET_DIR 下所有 .npy 和 .pth 文件"
+else
+    echo "错误：目录不存在或变量为空，跳过删除"
+fi
+
+echo "[2/7] Running USC-HAD..."
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/USC-HAD/USC-HAD"
+DATA_KEY="uschad"
+DATA_NAME="USCHAD"
+RUN_ID="${GLOBAL_TIME_TAG}_uschad_sensorllm"
+LOG_DIR="$GLOBAL_LOG_ROOT/uschad"
+mkdir -p "$LOG_DIR"
+
+# Settings (重置变量)
+ALIGN_W_MAX=200
+SEQ_LEN=200
+PATCH_LEN=100
+BATCH_SIZE=16 # 注意这里变了
+LR=0.001
+EPOCHS=8
+TEST_SUBJECTS="subject13,subject14"
+
+# Stage 1
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id USCHAD --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --test_subjects $TEST_SUBJECTS \
+  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
+  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  > "$LOG_DIR/stage1.log" 2>&1
+
+# Stage 2
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id USCHAD --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --test_subjects $TEST_SUBJECTS \
+  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
+  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  > "$LOG_DIR/stage2.log" 2>&1
+
+echo "Done USC-HAD."
+
+# ========================================================
+# 3. MHEALTH
+# ========================================================
+
+TARGET_DIR="/root/autodl-tmp/SensorLLMLib_v2"
+
+if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
+    find "$TARGET_DIR" -type f \( -name "*.npy" -o -name "*.pth" \) -delete
+    echo "已删除 $TARGET_DIR 下所有 .npy 和 .pth 文件"
+else
+    echo "错误：目录不存在或变量为空，跳过删除"
+fi
+
+
+echo "[3/7] Running MHEALTH..."
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/MHEALTHDATASET"
+DATA_KEY="mhealth"
+DATA_NAME="MHealth"
+RUN_ID="${GLOBAL_TIME_TAG}_mhealth_sensorllm"
+LOG_DIR="$GLOBAL_LOG_ROOT/mhealth"
+mkdir -p "$LOG_DIR"
+
+# Settings
+ALIGN_W_MAX=100
+SEQ_LEN=100
+PATCH_LEN=50
+TEST_SUBJECTS="subject1,subject3,subject6"
+BATCH_SIZE=16
+
+# Stage 1
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id MHealth --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --test_subjects $TEST_SUBJECTS \
+  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
+  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  > "$LOG_DIR/stage1.log" 2>&1
+
+# Stage 2
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id MHealth --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --test_subjects $TEST_SUBJECTS \
+  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
+  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  > "$LOG_DIR/stage2.log" 2>&1
+
+echo "Done MHEALTH."
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ========================================================
+# 4. PAMAP2 (50Hz Variant)
+# ========================================================
+TARGET_DIR="/root/autodl-tmp/SensorLLMLib_v2"
+
+if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
+    find "$TARGET_DIR" -type f \( -name "*.npy" -o -name "*.pth" \) -delete
+    echo "已删除 $TARGET_DIR 下所有 .npy 和 .pth 文件"
+else
+    echo "错误：目录不存在或变量为空，跳过删除"
+fi
+
+
+echo "[4/7] Running PAMAP2 (50Hz)..."
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
+DATA_KEY="pamap50"
+DATA_NAME="PAMAP50"
+RUN_ID="${GLOBAL_TIME_TAG}_pamap50_50hz_sensorllm"
+LOG_DIR="$GLOBAL_LOG_ROOT/pamap50_50hz"
+mkdir -p "$LOG_DIR"
+
+# Settings
+ALIGN_W_MAX=100
+SEQ_LEN=100
+PATCH_LEN=50
+PAMAP_VARIANT="pamap50"
+TEST_SUBJECTS="subject105,subject106"
+BATCH_SIZE=32
+
+# Stage 1
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id PAMAP2 --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --pamap_variant $PAMAP_VARIANT --test_subjects $TEST_SUBJECTS \
+  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
+  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  > "$LOG_DIR/stage1.log" 2>&1
+
+# Stage 2
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id PAMAP2 --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --pamap_variant $PAMAP_VARIANT --test_subjects $TEST_SUBJECTS \
+  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
+  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  > "$LOG_DIR/stage2.log" 2>&1
+
+echo "Done PAMAP50 (50Hz)."
+
+
+
+
+
+
+PRETRAIN_trainable_modules="patch_embed,resampler,mae_decoder"
+TRAIN_trainable_modules="patch_embed,resampler,llm_proj,cls_head"
+
+# ========================================================
+# 1. WISDM
+# ========================================================
+TARGET_DIR="/root/autodl-tmp/SensorLLMLib_v2"
+
+if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
+    find "$TARGET_DIR" -type f \( -name "*.npy" -o -name "*.pth" \) -delete
+    echo "已删除 $TARGET_DIR 下所有 .npy 和 .pth 文件"
+else
+    echo "错误：目录不存在或变量为空，跳过删除"
+fi
+
+
+echo "[5/7] Running WISDM..."
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
+DATA_KEY="wisdm"
+DATA_NAME="WISDM"
+RUN_ID="${GLOBAL_TIME_TAG}_wisdm_sensorllm"
+LOG_DIR="$GLOBAL_LOG_ROOT/wisdm"
+mkdir -p "$LOG_DIR"
+
+# Settings (WISDM ~20Hz)
+ALIGN_W_MAX=200
+SEQ_LEN=80
+PATCH_LEN=40
+BATCH_SIZE=64
+LR=0.001
+EPOCHS=8
+#
+# Stage 1
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id WISDM --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
+  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --test_users 33,34,35,36 \
+  --val_users 5,13,17,19,27,31 \
+  --wisdm_norm none \
+  > "$LOG_DIR/stage1.log" 2>&1
+
+# Stage 2
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id WISDM --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
+  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --test_users 33,34,35,36 \
+  --val_users 5,13,17,19,27,31 \
+  --wisdm_norm none \
+  > "$LOG_DIR/stage2.log" 2>&1
+
+echo "Done WISDM."
+
+
+# ========================================================
+# 2. HHAR_1user
+# ========================================================
+
+TARGET_DIR="/root/autodl-tmp/SensorLLMLib_v2"
+
+if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
+    find "$TARGET_DIR" -type f \( -name "*.npy" -o -name "*.pth" \) -delete
+    echo "已删除 $TARGET_DIR 下所有 .npy 和 .pth 文件"
+else
+    echo "错误：目录不存在或变量为空，跳过删除"
+fi
+
+echo "[6/7] Running HHAR_1user..."
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
+DATA_KEY="hhar"
+DATA_NAME="HHAR_1user"
+RUN_ID="${GLOBAL_TIME_TAG}_hhar_1user_sensorllm"
+LOG_DIR="$GLOBAL_LOG_ROOT/hhar_1user"
+mkdir -p "$LOG_DIR"
+
+# Settings (HHAR)
+ALIGN_W_MAX=256
+SEQ_LEN=128
+PATCH_LEN=64
+BATCH_SIZE=64
+LR=0.001
+EPOCHS=8
+
+# Stage 1
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id HHAR_1user --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
+  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --hhar_tol 0.05 \
+  --hhar_align_on Arrival_Time \
+  --hhar_use_cache 1 \
+  --hhar_norm none \
+  > "$LOG_DIR/stage1.log" 2>&1
+
+# Stage 2
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id HHAR_1user --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
+  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --hhar_tol 0.05 \
+  --hhar_align_on Arrival_Time \
+  --hhar_use_cache 1 \
+  --hhar_norm none \
+  > "$LOG_DIR/stage2.log" 2>&1
+
+echo "Done HHAR_1user."
+
+
+# ========================================================
+# 3. HHAR_cross_user
+# ========================================================
+#echo "[3/4] Running HHAR_cross_user..."
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
+#DATA_KEY="hhar"
+#DATA_NAME="HHAR_cross_user"
+#RUN_ID="${GLOBAL_TIME_TAG}_hhar_cross_user_sensorllm"
+#LOG_DIR="$GLOBAL_LOG_ROOT/hhar_cross_user"
+#mkdir -p "$LOG_DIR"
+#
+## Settings (HHAR)
+#ALIGN_W_MAX=256
+#SEQ_LEN=128
+#PATCH_LEN=64
+#BATCH_SIZE=64
+#LR=0.001
+#EPOCHS=8
+#
+## Stage 1
+#python -u run.py \
+#  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+#  --model_id HHAR_cross_user --run_id "$RUN_ID" --datasets $DATA_NAME \
+#  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+#  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
+#  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
+#  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --hhar_tol 0.05 \
+#  --hhar_align_on Arrival_Time \
+#  --hhar_use_cache 1 \
+#  --hhar_norm none \
+#  --val_ratio 0.1 --test_ratio 0.2 \
+#  > "$LOG_DIR/stage1.log" 2>&1
+#
+## Stage 2
+#python -u run.py \
+#  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+#  --model_id HHAR_cross_user --run_id "$RUN_ID" --datasets $DATA_NAME \
+#  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+#  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
+#  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
+#  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --hhar_tol 0.05 \
+#  --hhar_align_on Arrival_Time \
+#  --hhar_use_cache 1 \
+#  --hhar_norm none \
+#  --val_ratio 0.1 --test_ratio 0.2 \
+#  > "$LOG_DIR/stage2.log" 2>&1
+#
+#echo "Done HHAR_cross_user."
+
+
+# ========================================================
+# 4. MotionSense
+# ========================================================
+
+TARGET_DIR="/root/autodl-tmp/SensorLLMLib_v2"
+
+if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
+    find "$TARGET_DIR" -type f \( -name "*.npy" -o -name "*.pth" \) -delete
+    echo "已删除 $TARGET_DIR 下所有 .npy 和 .pth 文件"
+else
+    echo "错误：目录不存在或变量为空，跳过删除"
+fi
+
+echo "[7/7] Running MotionSense..."
+DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
+DATA_KEY="motionsense"
+DATA_NAME="MotionSense"
+RUN_ID="${GLOBAL_TIME_TAG}_motionsense_sensorllm"
+LOG_DIR="$GLOBAL_LOG_ROOT/motionsense"
+mkdir -p "$LOG_DIR"
+
+# Settings (MotionSense ~50Hz)
+ALIGN_W_MAX=256
+SEQ_LEN=128
+PATCH_LEN=64
+BATCH_SIZE=64
+LR=0.001
+EPOCHS=8
+
+
+
+# Stage 1
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id MotionSense --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
+  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+  --test_users 19,20,21,22,23,24 \
+  --val_users 13,14,15,16,17,18 \
+  --motionsense_feature_set A12 \
+  --motionsense_combine_grav_acc 0 \
+  --motionsense_norm none \
+  > "$LOG_DIR/stage1.log" 2>&1
+
+# Stage 2
+python -u run.py \
+  --task_name classification --is_training 1 --root_path "$DATA_ROOT" \
+  --model_id MotionSense --run_id "$RUN_ID" --datasets $DATA_NAME \
+  --model "$model_name" --data $DATA_NAME --dataset_key $DATA_KEY \
+  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
+  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
+  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
+  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
   --test_users 19,20,21,22,23,24 \
   --val_users 13,14,15,16,17,18 \
   --motionsense_feature_set A12 \
@@ -2683,7 +3209,7 @@ done
 #
 #
 #echo "[1/7] Running UCIHAR..."
-#DATA_ROOT="/root/autodl-tmp/datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
 #DATA_KEY="ucihar"
 #DATA_NAME="UCIHAR"
 #RUN_ID="${GLOBAL_TIME_TAG}_ucihar_sensorllm"
@@ -2696,7 +3222,7 @@ done
 #PATCH_LEN=64
 #BATCH_SIZE=32
 #LR=0.001
-#PRETRAIN_EPOCHS=10
+#PRETRAIN_EPOCHS=20
 #EPOCHS=8
 #
 #
@@ -2710,7 +3236,7 @@ done
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -2721,7 +3247,7 @@ done
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done UCIHAR."
@@ -2740,7 +3266,7 @@ done
 #fi
 #
 #echo "[2/7] Running USC-HAD..."
-#DATA_ROOT="/root/autodl-tmp/datasets/USC-HAD/USC-HAD"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/USC-HAD/USC-HAD"
 #DATA_KEY="uschad"
 #DATA_NAME="USCHAD"
 #RUN_ID="${GLOBAL_TIME_TAG}_uschad_sensorllm"
@@ -2765,7 +3291,7 @@ done
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -2777,7 +3303,7 @@ done
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done USC-HAD."
@@ -2797,7 +3323,7 @@ done
 ##
 ##
 ##echo "[3/7] Running MHEALTH..."
-##DATA_ROOT="/root/autodl-tmp/datasets/MHEALTHDATASET"
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/MHEALTHDATASET"
 ##DATA_KEY="mhealth"
 ##DATA_NAME="MHealth"
 ##RUN_ID="${GLOBAL_TIME_TAG}_mhealth_sensorllm"
@@ -2820,7 +3346,7 @@ done
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage1.log" 2>&1
 ##
 ### Stage 2
@@ -2832,7 +3358,7 @@ done
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage2.log" 2>&1
 ##
 ##echo "Done MHEALTH."
@@ -2863,7 +3389,7 @@ done
 ##
 ##
 ##echo "[4/7] Running PAMAP2 (50Hz)..."
-##DATA_ROOT="/root/autodl-tmp/datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
 ##DATA_KEY="pamap50"
 ##DATA_NAME="PAMAP50"
 ##RUN_ID="${GLOBAL_TIME_TAG}_pamap50_50hz_sensorllm"
@@ -2887,7 +3413,7 @@ done
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage1.log" 2>&1
 ##
 ### Stage 2
@@ -2899,7 +3425,7 @@ done
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage2.log" 2>&1
 ##
 ##echo "Done PAMAP50 (50Hz)."
@@ -2926,7 +3452,7 @@ done
 ##
 ##
 ##echo "[5/7] Running WISDM..."
-##DATA_ROOT="/root/autodl-tmp/datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
 ##DATA_KEY="wisdm"
 ##DATA_NAME="WISDM"
 ##RUN_ID="${GLOBAL_TIME_TAG}_wisdm_sensorllm"
@@ -2949,7 +3475,7 @@ done
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 33,34,35,36 \
 ##  --val_users 5,13,17,19,27,31 \
 ##  --wisdm_norm none \
@@ -2963,7 +3489,7 @@ done
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 33,34,35,36 \
 ##  --val_users 5,13,17,19,27,31 \
 ##  --wisdm_norm none \
@@ -2986,7 +3512,7 @@ done
 ##fi
 ##
 ##echo "[6/7] Running HHAR_1user..."
-##DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
 ##DATA_KEY="hhar"
 ##DATA_NAME="HHAR_1user"
 ##RUN_ID="${GLOBAL_TIME_TAG}_hhar_1user_sensorllm"
@@ -3009,7 +3535,7 @@ done
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -3024,7 +3550,7 @@ done
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -3038,7 +3564,7 @@ done
 ### 3. HHAR_cross_user
 ### ========================================================
 ###echo "[3/4] Running HHAR_cross_user..."
-###DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
+###DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
 ###DATA_KEY="hhar"
 ###DATA_NAME="HHAR_cross_user"
 ###RUN_ID="${GLOBAL_TIME_TAG}_hhar_cross_user_sensorllm"
@@ -3061,7 +3587,7 @@ done
 ###  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ###  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ###  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-###  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+###  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ###  --hhar_tol 0.05 \
 ###  --hhar_align_on Arrival_Time \
 ###  --hhar_use_cache 1 \
@@ -3077,7 +3603,7 @@ done
 ###  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ###  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ###  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-###  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+###  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ###  --hhar_tol 0.05 \
 ###  --hhar_align_on Arrival_Time \
 ###  --hhar_use_cache 1 \
@@ -3102,7 +3628,7 @@ done
 ##fi
 ##
 ##echo "[7/7] Running MotionSense..."
-##DATA_ROOT="/root/autodl-tmp/datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
 ##DATA_KEY="motionsense"
 ##DATA_NAME="MotionSense"
 ##RUN_ID="${GLOBAL_TIME_TAG}_motionsense_sensorllm"
@@ -3127,7 +3653,7 @@ done
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 19,20,21,22,23,24 \
 ##  --val_users 13,14,15,16,17,18 \
 ##  --motionsense_feature_set A12 \
@@ -3143,7 +3669,7 @@ done
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 19,20,21,22,23,24 \
 ##  --val_users 13,14,15,16,17,18 \
 ##  --motionsense_feature_set A12 \
@@ -3208,7 +3734,7 @@ done
 #
 #
 #echo "[1/7] Running UCIHAR..."
-#DATA_ROOT="/root/autodl-tmp/datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
 #DATA_KEY="ucihar"
 #DATA_NAME="UCIHAR"
 #RUN_ID="${GLOBAL_TIME_TAG}_ucihar_sensorllm"
@@ -3221,7 +3747,7 @@ done
 #PATCH_LEN=64
 #BATCH_SIZE=32
 #LR=0.001
-#PRETRAIN_EPOCHS=10
+#PRETRAIN_EPOCHS=20
 #EPOCHS=8
 #
 #
@@ -3235,7 +3761,7 @@ done
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -3246,7 +3772,7 @@ done
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done UCIHAR."
@@ -3265,7 +3791,7 @@ done
 #fi
 #
 #echo "[2/7] Running USC-HAD..."
-#DATA_ROOT="/root/autodl-tmp/datasets/USC-HAD/USC-HAD"
+#DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/USC-HAD/USC-HAD"
 #DATA_KEY="uschad"
 #DATA_NAME="USCHAD"
 #RUN_ID="${GLOBAL_TIME_TAG}_uschad_sensorllm"
@@ -3290,7 +3816,7 @@ done
 #  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 #  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage1.log" 2>&1
 #
 ## Stage 2
@@ -3302,7 +3828,7 @@ done
 #  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 #  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 #  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-#  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+#  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 #  > "$LOG_DIR/stage2.log" 2>&1
 #
 #echo "Done USC-HAD."
@@ -3322,7 +3848,7 @@ done
 ##
 ##
 ##echo "[3/7] Running MHEALTH..."
-##DATA_ROOT="/root/autodl-tmp/datasets/MHEALTHDATASET"
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/MHEALTHDATASET"
 ##DATA_KEY="mhealth"
 ##DATA_NAME="MHealth"
 ##RUN_ID="${GLOBAL_TIME_TAG}_mhealth_sensorllm"
@@ -3345,7 +3871,7 @@ done
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage1.log" 2>&1
 ##
 ### Stage 2
@@ -3357,7 +3883,7 @@ done
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage2.log" 2>&1
 ##
 ##echo "Done MHEALTH."
@@ -3388,7 +3914,7 @@ done
 ##
 ##
 ##echo "[4/7] Running PAMAP2 (50Hz)..."
-##DATA_ROOT="/root/autodl-tmp/datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/pamap2+physical+activity+monitoring/PAMAP2_Dataset/PAMAP2_Dataset"
 ##DATA_KEY="pamap50"
 ##DATA_NAME="PAMAP50"
 ##RUN_ID="${GLOBAL_TIME_TAG}_pamap50_50hz_sensorllm"
@@ -3412,7 +3938,7 @@ done
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage1.log" 2>&1
 ##
 ### Stage 2
@@ -3424,7 +3950,7 @@ done
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  > "$LOG_DIR/stage2.log" 2>&1
 ##
 ##echo "Done PAMAP50 (50Hz)."
@@ -3451,7 +3977,7 @@ done
 ##
 ##
 ##echo "[5/7] Running WISDM..."
-##DATA_ROOT="/root/autodl-tmp/datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/WISDM_ar_latest/WISDM_ar_v1.1"   # <- 改成你的路径(文件夹内有 WISDM_ar_v1.1_raw.txt) 或直接指向 raw.txt
 ##DATA_KEY="wisdm"
 ##DATA_NAME="WISDM"
 ##RUN_ID="${GLOBAL_TIME_TAG}_wisdm_sensorllm"
@@ -3474,7 +4000,7 @@ done
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 33,34,35,36 \
 ##  --val_users 5,13,17,19,27,31 \
 ##  --wisdm_norm none \
@@ -3488,7 +4014,7 @@ done
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 33,34,35,36 \
 ##  --val_users 5,13,17,19,27,31 \
 ##  --wisdm_norm none \
@@ -3511,7 +4037,7 @@ done
 ##fi
 ##
 ##echo "[6/7] Running HHAR_1user..."
-##DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 改成你的路径(含 Phones_*.csv / Watch_*.csv)
 ##DATA_KEY="hhar"
 ##DATA_NAME="HHAR_1user"
 ##RUN_ID="${GLOBAL_TIME_TAG}_hhar_1user_sensorllm"
@@ -3534,7 +4060,7 @@ done
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -3549,7 +4075,7 @@ done
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --hhar_tol 0.05 \
 ##  --hhar_align_on Arrival_Time \
 ##  --hhar_use_cache 1 \
@@ -3563,7 +4089,7 @@ done
 ### 3. HHAR_cross_user
 ### ========================================================
 ###echo "[3/4] Running HHAR_cross_user..."
-###DATA_ROOT="/root/autodl-tmp/datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
+###DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/heterogeneity+activity+recognition/Activity recognition exp/Activity recognition exp"   # <- 同上
 ###DATA_KEY="hhar"
 ###DATA_NAME="HHAR_cross_user"
 ###RUN_ID="${GLOBAL_TIME_TAG}_hhar_cross_user_sensorllm"
@@ -3586,7 +4112,7 @@ done
 ###  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ###  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ###  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-###  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+###  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ###  --hhar_tol 0.05 \
 ###  --hhar_align_on Arrival_Time \
 ###  --hhar_use_cache 1 \
@@ -3602,7 +4128,7 @@ done
 ###  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ###  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ###  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-###  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+###  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ###  --hhar_tol 0.05 \
 ###  --hhar_align_on Arrival_Time \
 ###  --hhar_use_cache 1 \
@@ -3627,7 +4153,7 @@ done
 ##fi
 ##
 ##echo "[7/7] Running MotionSense..."
-##DATA_ROOT="/root/autodl-tmp/datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
+##DATA_ROOT="D:\fuy\MyCode\SensorLLMLib\datasets/motion-sense-master/motion-sense-master/data"  # <- 改成你的路径
 ##DATA_KEY="motionsense"
 ##DATA_NAME="MotionSense"
 ##RUN_ID="${GLOBAL_TIME_TAG}_motionsense_sensorllm"
@@ -3652,7 +4178,7 @@ done
 ##  --seq_len $ALIGN_W_MAX --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 1 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $PRETRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $PRETRAIN_EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 19,20,21,22,23,24 \
 ##  --val_users 13,14,15,16,17,18 \
 ##  --motionsense_feature_set A12 \
@@ -3668,7 +4194,7 @@ done
 ##  --seq_len $SEQ_LEN --patch_len $PATCH_LEN --stride $PATCH_LEN --stage 2 \
 ##  --batch_size $BATCH_SIZE --trainable_modules $TRAIN_trainable_modules \
 ##  --llama_name $LLAMA_NAME --learning_rate $LR --train_epochs $EPOCHS \
-##  --num_workers 0 --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
+##  --num_workers 0 --mask_rate $MASK_RATE --ts_backbone_yaml $TS_BACNBONE_YAML --vqvae_path $VQVAEPATH \
 ##  --test_users 19,20,21,22,23,24 \
 ##  --val_users 13,14,15,16,17,18 \
 ##  --motionsense_feature_set A12 \
@@ -3696,7 +4222,7 @@ done
 
 
 
-python /root/autodl-tmp/SensorLLMLib_v2/send_email.py
-
-
-shutdown -h now
+#python /root/autodl-tmp/SensorLLMLib_v2/send_email.py
+#
+#
+#shutdown -h now

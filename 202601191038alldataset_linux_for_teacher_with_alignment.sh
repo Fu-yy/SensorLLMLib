@@ -24,7 +24,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #echo "Logs will be saved to: $GLOBAL_LOG_ROOT"
 #echo "========================================================"
 #
-#model_name=SensorLLMFuy_test_withllm_mae_vqvae
+#model_name=SensorLLMFuy_test_withllm_mae_vqvae_with_alignment
 #PRETRAIN_trainable_modules="patch_embed,resampler,mae_decoder"
 #TRAIN_trainable_modules="patch_embed,resampler,llm_proj,cls_head"
 #
@@ -549,7 +549,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #echo "Logs will be saved to: $GLOBAL_LOG_ROOT"
 #echo "========================================================"
 #
-#model_name=SensorLLMFuy_test_withllm_mae_vqvae
+#model_name=SensorLLMFuy_test_withllm_mae_vqvae_with_alignment
 #PRETRAIN_trainable_modules="patch_embed,resampler,mae_decoder"
 #TRAIN_trainable_modules="patch_embed,resampler,llm_proj,cls_head"
 #
@@ -1074,7 +1074,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #echo "Logs will be saved to: $GLOBAL_LOG_ROOT"
 #echo "========================================================"
 #
-#model_name=SensorLLMFuy_test_withllm_mae_vqvae
+#model_name=SensorLLMFuy_test_withllm_mae_vqvae_with_alignment
 #PRETRAIN_trainable_modules="patch_embed,resampler,mae_decoder"
 #TRAIN_trainable_modules="patch_embed,resampler,llm_proj,cls_head"
 #
@@ -1599,7 +1599,7 @@ TS_BACNBONE_YAML="ts_backbone_linux.yaml"
 #echo "Logs will be saved to: $GLOBAL_LOG_ROOT"
 #echo "========================================================"
 #
-#model_name=SensorLLMFuy_test_withllm_mae_vqvae
+#model_name=SensorLLMFuy_test_withllm_mae_vqvae_with_alignment
 #PRETRAIN_trainable_modules="patch_embed,resampler,mae_decoder"
 #TRAIN_trainable_modules="patch_embed,resampler,llm_proj,cls_head"
 #
@@ -2125,7 +2125,7 @@ echo "Starting Batch Training Run: $GLOBAL_TIME_TAG"
 echo "Logs will be saved to: $GLOBAL_LOG_ROOT"
 echo "========================================================"
 
-model_name=SensorLLMFuy_test_withllm_mae_vqvae
+model_name=SensorLLMFuy_test_withllm_mae_vqvae_with_alignment
 PRETRAIN_trainable_modules="patch_embed,resampler,mae_decoder"
 TRAIN_trainable_modules="patch_embed,resampler,llm_proj,cls_head"
 
@@ -2651,7 +2651,7 @@ done
 #echo "Logs will be saved to: $GLOBAL_LOG_ROOT"
 #echo "========================================================"
 #
-#model_name=SensorLLMFuy_test_withllm_mae_vqvae
+#model_name=SensorLLMFuy_test_withllm_mae_vqvae_with_alignment
 #PRETRAIN_trainable_modules="patch_embed,resampler,mae_decoder"
 #TRAIN_trainable_modules="patch_embed,resampler,llm_proj,cls_head"
 #
@@ -3176,7 +3176,7 @@ done
 #echo "Logs will be saved to: $GLOBAL_LOG_ROOT"
 #echo "========================================================"
 #
-#model_name=SensorLLMFuy_test_withllm_mae_vqvae
+#model_name=SensorLLMFuy_test_withllm_mae_vqvae_with_alignment
 #PRETRAIN_trainable_modules="patch_embed,resampler,mae_decoder"
 #TRAIN_trainable_modules="patch_embed,resampler,llm_proj,cls_head"
 #
