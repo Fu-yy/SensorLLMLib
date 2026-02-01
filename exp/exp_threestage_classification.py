@@ -190,7 +190,7 @@ class TeeLogger:
                 f.flush()
 
 
-class Exp_Classification(Exp_Basic):
+class Exp_ThreeStage_Classification(Exp_Basic):
     """
     V2-fixed:
       - optimizer param groups (decay/no_decay)
@@ -376,7 +376,7 @@ class Exp_Classification(Exp_Basic):
         # save_root = os.path.join(getattr(self.args, "pretrain_checkpoints", "./pretrain_ckpts"), setting)
         save_root = os.path.join(self.run_root, "stage1", "ckpts", setting)
 
-        wrapper_path = os.path.join(save_root, "best_wrapper_student_checkoutpoint.pth")
+        wrapper_path = os.path.join(save_root, "best_student_distill.pth")
         hf_dir = os.path.join(save_root, "best_hf")  # 你 save_hf_bundle(tag="best") 就是这个
 
         has_wrapper = os.path.isfile(wrapper_path)
@@ -556,10 +556,10 @@ class Exp_Classification(Exp_Basic):
             raise RuntimeError(f"classify output must be [B,num_class], got {tuple(out.shape)}")
         return out
 
-    def _forward_pretrain_loss(self, batch_x, padding_mask,mean,var,target):
+    def _forward_pretrain_loss(self, batch_x, padding_mask,mean,var,labels):
         if not self._is_two_stage_model():
             raise RuntimeError("This model does not support pretrain stage.")
-        out = self.model(batch_x, padding_mask, mode="pretrain",mean=mean,var=var,target=target)
+        out = self.model(batch_x, padding_mask, mode="pretrain",mean=mean,var=var,labels=labels)
         if not isinstance(out, (tuple, list)) or len(out) < 1:
             raise RuntimeError("pretrain forward must return (loss_mse, ...)")
         loss_mse = out[0]
@@ -584,6 +584,80 @@ class Exp_Classification(Exp_Basic):
             padding_mask = padding_mask > 0
         return padding_mask
 
+    def run_phase(self,phase_name, max_epochs, best_path, train_loader,val_loader,save_teacher=False):
+        self.args.train_mode = phase_name
+        m = _unwrap(self.model)
+        m.train_mode = phase_name
+
+        # 冻结/解冻
+        self.set_trainable_by_mode(self.model, self.args)
+
+        # 重建 opt/sched（很关键！因为 trainable 参数集合变了）
+        opt = self._select_optimizer()
+        scheduler = self._build_scheduler(opt, steps_per_epoch=len(train_loader))
+        report_trainable_params(self.model)
+        self._log_lrs(opt, f"[LR] init phase={phase_name}")
+
+        best_val = None
+
+        for epoch in range(max_epochs):
+            self.model.train()
+            tr = []
+
+            for batch_x, label, padding_mask ,mean,var in train_loader:
+                opt.zero_grad()
+                batch_x = batch_x.float().to(self.device)
+                padding_mask = self._to_bool_mask(padding_mask)
+                label = label.to(self.device)
+                target = label.long().view(-1)
+                loss,_,_ = self.model(batch_x, padding_mask,labels=target,mean=mean,var=var)  # 你已有：内部会调用 model.forward(stage1)
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
+                opt.step()
+
+                if scheduler is not None and bool(getattr(self.args, "cosine_by_iter", False)):
+                    scheduler.step()
+
+                tr.append(float(loss.item()))
+
+            if scheduler is not None and not bool(getattr(self.args, "cosine_by_iter", False)):
+                if isinstance(scheduler, dict):
+                    if epoch < int(getattr(self.args, "warmup_epochs", 0)):
+                        scheduler["warm"].step()
+                    else:
+                        scheduler["cosine"].step()
+                else:
+                    scheduler.step()
+
+            train_mse = float(np.mean(tr)) if tr else 0.0
+            val_mse = self.pretrain_vali(val_loader)
+            self._log_lrs(opt, f"[LR] phase={phase_name} epoch={epoch + 1}")
+
+            self.log(f"[Stage1-{phase_name}] epoch={epoch + 1} train_mse={train_mse:.6f} val_mse={val_mse:.6f}")
+
+            if best_val is None or val_mse < best_val:
+                best_val = val_mse
+                m = _unwrap(self.model)
+
+                if save_teacher:
+                    # 保存 teacher head
+                    m.save_teacher_head(best_path)
+                else:
+                    # 保存 student wrapper（你现在 save_wrapper 会跳过 teacher）
+                    m.save_wrapper(best_path)
+
+                self.log(f"[save-best] phase={phase_name} path={best_path} val={best_val:.6f}")
+
+        # phase 完成后：回滚到 best 再进入下一阶段
+        m = _unwrap(self.model)
+        if save_teacher:
+            m.load_teacher_head(best_path, map_location=self.device)
+        else:
+
+            m.load_wrapper(best_path, map_location=self.device)
+
+        return best_val
+
     def _compute_class_weights(self, train_loader, num_class: int) -> torch.Tensor:
         counts = torch.zeros(num_class, dtype=torch.long)
         for _, label, _ in train_loader:
@@ -599,6 +673,28 @@ class Exp_Classification(Exp_Basic):
     # -------------------------
     # optimizer / criterion
     # -------------------------
+    def set_trainable_by_mode(self,model, args):
+        mode = str(getattr(args, "train_mode", "student_distill_B"))
+
+        for p in model.parameters():
+            p.requires_grad = False
+
+        if int(getattr(args, "stage", 1)) == 1 and mode == "teacher_lm":
+            assert getattr(model, "teacher", None) is not None, "teacher_lm needs model.teacher"
+            for p in model.teacher.adapter.parameters():
+                p.requires_grad = True
+            for p in model.teacher.output_head.parameters():
+                p.requires_grad = True
+
+        elif int(getattr(args, "stage", 1)) == 1 and mode in ["student_ce", "student_distill_B"]:
+            for p in model.student.parameters():
+                p.requires_grad = True
+
+        elif int(getattr(args, "stage", 1)) == 2:
+            for p in model.student.parameters():
+                p.requires_grad = True
+
+
     def _select_optimizer(self):
         lr = float(getattr(self.args, "learning_rate", 1e-3))
         wd = float(getattr(self.args, "weight_decay", 1e-2))
@@ -608,7 +704,6 @@ class Exp_Classification(Exp_Basic):
             if not p.requires_grad:
                 continue
             nn_ = n.lower()
-            # safe no_decay rule
             if n.endswith("bias") or ("norm" in nn_) or (".bn" in nn_) or ("layernorm" in nn_):
                 no_decay.append(p)
             elif ("embedding" in nn_) or nn_.endswith("embed") or ("_embed" in nn_) or ("embed_" in nn_):
@@ -620,8 +715,12 @@ class Exp_Classification(Exp_Basic):
             {"params": decay, "lr": lr, "weight_decay": wd},
             {"params": no_decay, "lr": lr, "weight_decay": 0.0},
         ]
+
         opt = optim.RAdam(groups, lr=lr)
-        # opt = optim.AdamW(groups, lr=lr, betas=(0.9, 0.999))
+
+        num_trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f"[Opt] stage={getattr(self.args, 'stage', None)} train_mode={getattr(self.args, 'train_mode', None)} "
+              f"trainable_params={num_trainable}")
 
         return opt
 
@@ -698,13 +797,13 @@ class Exp_Classification(Exp_Basic):
         self.model.eval()
         losses = []
         with torch.no_grad():
-            for batch_x, label, padding_mask,mean,var in loader:
+            for batch_x, target, padding_mask,mean,var in loader:
                 batch_x = batch_x.float().to(self.device)
-                padding_mask = self._to_bool_mask(padding_mask)
-                label=label.to(self.device)
-                target = label.long().view(-1)
 
-                loss_mse = self._forward_pretrain_loss(batch_x, padding_mask,mean=mean,var=var,labels=target)
+                target = target.to(self.device)
+                labels = target.long().view(-1)
+                padding_mask = self._to_bool_mask(padding_mask)
+                loss_mse = self._forward_pretrain_loss(batch_x, padding_mask,mean,var,labels)
                 losses.append(float(loss_mse.item()))
         self.model.train()
         return float(np.mean(losses)) if len(losses) else 0.0
@@ -732,6 +831,8 @@ class Exp_Classification(Exp_Basic):
             f.write(f"test_mse:{test_mse:.6f}\n\n")
 
         return test_mse
+
+
 
     def pretrain(self, setting):
         if not self._is_two_stage_model():
@@ -762,6 +863,10 @@ class Exp_Classification(Exp_Basic):
         save_root = paths["stage1_ckpt_dir"]
         os.makedirs(save_root, exist_ok=True)
 
+        teacher_best = os.path.join(save_root, "best_teacher_head.pth")
+        student_ce_best = os.path.join(save_root, "best_student_ce.pth")
+        student_distill_best = os.path.join(save_root, "best_student_distill.pth")
+
         # stage1 meta
         self._dump_meta(paths["meta_stage1"], stage="stage1", setting=setting, paths=paths)
 
@@ -774,7 +879,7 @@ class Exp_Classification(Exp_Basic):
 
         if bool(getattr(self.args, "freeze_llm", True)):
             self.set_trainable_modules()
-
+        self.set_trainable_by_mode(self.model, self.args)
         # ---- diagnostics: lock in hyperparams ----
         self.log(
             f"[HP] lr={float(self.args.learning_rate):.2e} "
@@ -785,84 +890,46 @@ class Exp_Classification(Exp_Basic):
         )
 
         opt = self._select_optimizer()
-        scheduler = self._build_scheduler(opt, steps_per_epoch=len(train_loader))
 
-        best_val = None
-        report_trainable_params(self.model)
+        # report_trainable_params(self.model)
         self._log_lrs(opt, "[LR] init")
 
-        # =========================
-        # ✅ helper: collect embeddings for KMeans (defined ONCE)
-        # =========================
 
+        self.model.train()
 
-        for epoch in range(self.args.train_epochs):
-            self.model.train()
-            tr = []
+        # 0) teacher_lm：只训 teacher head
+        self.run_phase(
+            phase_name="teacher_lm",
+            max_epochs=int(getattr(self.args, "teacher_lm_epochs", 10)),
+            best_path=teacher_best,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            save_teacher=True
+        )
+        self.log(f"[Stage1-teacher_lm] teacher_lm_epochs={10} ")
 
-            for batch_x, label, padding_mask ,mean,var in train_loader:
-                opt.zero_grad()
-                batch_x = batch_x.float().to(self.device)
-                padding_mask = self._to_bool_mask(padding_mask)
-                label = label.to(self.device)
-                target = label.long().view(-1)
-                loss_mse = self._forward_pretrain_loss(batch_x, padding_mask,mean=mean,var=var,labels=target)
-                loss_mse.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
-                opt.step()
+        # 1) student_ce：只训 student
+        # self.run_phase(
+        #     phase_name="student_ce",
+        #     max_epochs=int(getattr(self.args, "student_ce_epochs", 10)),
+        #     best_path=student_ce_best,
+        #     train_loader=train_loader,
+        #     val_loader=val_loader,
+        #     save_teacher=False
+        # )
+        # self.log(f"[Stage1-student_ce] student_ce_epochs={10} ")
 
-                # iter-step scheduler
-                if scheduler is not None and bool(getattr(self.args, "cosine_by_iter", False)):
-                    scheduler.step()
+        # 2) student_distill_B：只训 student + KL（teacher head 已经加载到 best）
+        self.run_phase(
+            phase_name="student_distill_B",
+            max_epochs=int(getattr(self.args, "student_distill_epochs", 10)),
+            best_path=student_distill_best,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            save_teacher=False
+        )
 
-                tr.append(float(loss_mse.item()))
-
-            # epoch-step scheduler
-            if scheduler is not None and not bool(getattr(self.args, "cosine_by_iter", False)):
-                if isinstance(scheduler, dict):
-                    # warmup then cosine
-                    if epoch < int(getattr(self.args, "warmup_epochs", 0)):
-                        scheduler["warm"].step()
-                    else:
-                        scheduler["cosine"].step()
-                else:
-                    scheduler.step()
-
-            train_mse = float(np.mean(tr)) if len(tr) else 0.0
-            val_mse = self.pretrain_vali(val_loader)
-            self._log_lrs(opt, f"[LR] epoch={epoch + 1}")
-
-            self.log(f"[Stage1-Pretrain] epoch={epoch + 1} train_mse={train_mse:.6f} val_mse={val_mse:.6f}")
-
-            # ----------------------------
-            # save best wrapper
-            # ----------------------------
-            if best_val is None or val_mse < best_val:
-                best_val = val_mse
-
-                m = _unwrap(self.model)
-                wrapper_path = os.path.join(save_root, "best_wrapper_student_checkoutpoint.pth")
-                wrapper_path = to_secure_path(wrapper_path)  # 处理
-
-                if hasattr(m, "save_wrapper"):
-                    m.save_wrapper(wrapper_path)
-                else:
-                    torch.save(m.state_dict(), wrapper_path)
-                self.log(f"[save] wrapper = {wrapper_path}")
-
-                status_path = os.path.join(paths["meta_dir"], "status_stage1.json")
-                status_path = to_secure_path(status_path)  # 处理
-
-                with open(status_path, "w", encoding="utf-8") as f:
-                    json.dump({
-                        "best_val": float(best_val),
-                        "best_epoch": int(epoch + 1),
-                        "artifact_path": paths["stage1_wrapper"],
-                        "wrapper_path":wrapper_path,
-                        "artifact_exists": os.path.exists(paths["stage1_wrapper"]),
-                        "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    }, f, ensure_ascii=False, indent=2)
-
+        self.log(f"[Stage1-student_distill_B] student_distill_epochs={10} ")
 
         return
 
@@ -1065,10 +1132,10 @@ class Exp_Classification(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = self._to_bool_mask(padding_mask)
                 label = label.to(self.device)
-                target = label.long().view(-1)
 
                 outputs = self._forward_classify(batch_x, padding_mask)
                 # print("outputs:", outputs.shape, "label:", label.shape)
+                target = label.long().view(-1)
                 # label_test= label.long().squeeze(-1)
                 # print("target:", target.shape)
                 # print("label_test:", label_test.shape)

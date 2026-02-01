@@ -114,6 +114,7 @@ def forward(self, gt_ids):
 
 '''
 
+import math
 # 禁用 fused attention，避免 _efficient_attention_backward invalid argument
 torch.backends.cuda.enable_flash_sdp(False)
 torch.backends.cuda.enable_mem_efficient_sdp(False)
@@ -123,13 +124,10 @@ try:
 except Exception:
     yaml = None
 
-# models/SensorLLMResampler.py (Route A - Scientific MAE)
-import os
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from typing import Any, Dict, List, Optional, Tuple
-from transformers import AutoTokenizer, AutoModelForCausalLM
+def entropy_from_probs(p: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    # p: [B, K]
+    return -(p * (p + eps).log()).sum(dim=-1)
 
 # 禁用 fused attention 以兼容性优先
 torch.backends.cuda.enable_flash_sdp(False)
@@ -162,11 +160,13 @@ import yaml
 # 1. 辅助类与函数
 # ==========================================
 
+
 @dataclass
 class TeacherOut:
-    probs: torch.Tensor  # [B, K] Teacher对mask位置的预测分布
-    valid: torch.Tensor  # [B] 标记该样本是否成功生成了guidance
-
+    logits: torch.Tensor      # [B, Kclass]
+    probs: torch.Tensor       # [B, Kclass]
+    feat: torch.Tensor        # [B, D]
+    reason_text: Optional[List[str]] = None   # len B, optional
 
 def ids_to_special_tokens(token_ids: torch.Tensor, K: int) -> List[List[str]]:
     """
@@ -352,6 +352,146 @@ class StudentTransformer(nn.Module):
         return logits, feat
 
 
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import os
+import yaml
+from typing import Dict, Any
+
+
+class DeepConvLSTMAttention(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+
+        # ================== 1. 你的初始化逻辑 (保留) ==================
+        print(f"[DeepConvLSTMAttnModel] Init...")
+        self.stage = int(getattr(args, "stage", 1))
+        # self.device = args.device # 建议在 forward 中使用 x.device，更灵活
+
+        # -------- dataset cfg load --------
+        self.dataset_key = str(getattr(args, "dataset_key", getattr(args, "data", "mhealth"))).lower()
+        self.ds_cfg: Dict[str, Any] = {}
+        if hasattr(args, "ds_cfg") and isinstance(args.ds_cfg, dict):
+            self.ds_cfg = args.ds_cfg
+        else:
+            ts_yaml = getattr(args, "ts_backbone_yaml", None)
+            if ts_yaml is not None:
+                if not os.path.exists(ts_yaml):
+                    raise FileNotFoundError(ts_yaml)
+                with open(ts_yaml, "r", encoding="utf-8") as f:
+                    cfg_all = yaml.safe_load(f)
+                if self.dataset_key not in cfg_all:
+                    raise KeyError(f"{self.dataset_key} not in {ts_yaml}")
+                self.ds_cfg = cfg_all[self.dataset_key]
+
+        # 读取参数
+        self.C = int(self.ds_cfg.get("channel_num", getattr(args, "enc_in", 15)))  # 传感器通道数 (NB_SENSOR_CHANNELS)
+        self.num_class = int(self.ds_cfg.get("num_labels", getattr(args, "num_class", 12)))  # 类别数
+        self.seq_len_orig = int(getattr(args, "seq_len", 200))
+
+        # ================== 2. DeepConvLSTM 超参数 ==================
+        # 你可以将这些也放入 configs，这里使用原代码的默认值作为 fallback
+        self.num_filters = int(getattr(args, "num_filters", 64))
+        self.filter_size = int(getattr(args, "filter_size", 5))
+        self.num_units_lstm = int(getattr(args, "num_units_lstm", 128))
+        self.num_layers_lstm = int(getattr(args, "num_layers_lstm", 2))
+        # Dropout
+        self.dropout_val = float(getattr(args, "dropout", 0.5))
+        self.attention_dropout_val = float(getattr(args, "attention_dropout", 0.5))
+
+        # ================== 3. 网络架构定义 (源自 main_script.py) ==================
+        # 卷积层: input shape (Batch, 1, SeqLen, Channels)
+        # 注意: 这里的 Conv2d 卷积核是 (filter_size, 1)，意味着它在时间维上卷积，传感器维度保持独立卷积
+        self.conv2DLayer1 = nn.Conv2d(1, self.num_filters, (self.filter_size, 1), stride=(1, 1))
+        self.relu1 = nn.ReLU()
+        self.conv2DLayer2 = nn.Conv2d(self.num_filters, self.num_filters, (self.filter_size, 1), stride=(1, 1))
+        self.relu2 = nn.ReLU()
+        self.conv2DLayer3 = nn.Conv2d(self.num_filters, self.num_filters, (self.filter_size, 1), stride=(1, 1))
+        self.relu3 = nn.ReLU()
+        self.conv2DLayer4 = nn.Conv2d(self.num_filters, self.num_filters, (self.filter_size, 1), stride=(1, 1))
+        self.relu4 = nn.ReLU()
+
+        # LSTM层
+        # input_size calculation:
+        # 卷积后的输出是 (Batch, Filters, SeqLen, Sensors)。
+        # 转换到 LSTM 时，会将 Filters 和 Sensors 展平。
+        # 因此 LSTM input_size = num_filters * num_sensors
+        lstm_input_size = self.num_filters * self.C
+        self.lstm = nn.LSTM(lstm_input_size, self.num_units_lstm, self.num_layers_lstm,
+                            bidirectional=False, dropout=self.dropout_val)
+
+        self.dropout = nn.Dropout(self.dropout_val)
+        self.attention_dropout = nn.Dropout(self.attention_dropout_val)
+
+        # Attention 层 (main_script.py 特有)
+        hidden_dim = self.num_units_lstm  # 单向 LSTM
+        self.attentionLayer1 = nn.Linear(hidden_dim, hidden_dim)
+        self.tanh1 = nn.Tanh()
+        self.attentionLayer2 = nn.Linear(hidden_dim, 1)
+        self.softmax_attention = nn.Softmax(dim=0)
+
+        # 全连接层
+        self.dense_layer = nn.Linear(hidden_dim, self.num_class)
+
+    def initHidden(self, batch_size, device):
+        # 原代码逻辑：使用随机噪声初始化隐层状态
+        h0 = torch.randn(self.num_layers_lstm, batch_size, self.num_units_lstm).to(device) * 0.08
+        c0 = torch.randn(self.num_layers_lstm, batch_size, self.num_units_lstm).to(device) * 0.08
+        return (h0, c0)
+
+    def forward(self, x, padding_mask=None, mode=None, labels=None):
+        # x shape 假设为: (Batch, SeqLen, Channels)
+        # 原模型需要: (Batch, 1, SeqLen, Channels)
+        # 调整维度以适配 DeepConvLSTM 的 Conv2d 输入
+        if x.dim() == 3:
+            x = x.unsqueeze(1)  # -> (Batch, 1, SeqLen, Channels)
+
+        # 1. 卷积部分
+        convout1 = self.relu1(self.conv2DLayer1(x))
+        convout2 = self.relu2(self.conv2DLayer2(convout1))
+        convout3 = self.relu3(self.conv2DLayer3(convout2))
+        convout4 = self.relu4(self.conv2DLayer4(convout3))
+
+        # 2. 变换维度适配 LSTM
+        # 当前 shape: (Batch, Filters, NewSeqLen, Channels)
+        # 目标 shape: (NewSeqLen, Batch, Filters * Channels)
+        lstm_input = convout4.permute(2, 0, 1, 3)  # -> (NewSeqLen, Batch, Filters, Channels)
+        seq_len, batch_size, _, _ = lstm_input.size()
+        lstm_input = lstm_input.contiguous().view(seq_len, batch_size, -1)
+
+        lstm_input = self.dropout(lstm_input)
+
+        # 3. LSTM 部分
+        output, hidden = self.lstm(lstm_input, self.initHidden(batch_size, x.device))
+        # output shape: (SeqLen, Batch, Hidden)
+
+        # 4. Attention 部分 (核心差异)
+        past_context = output[:-1]  # 过去的所有时间步
+        current = output[-1]  # 当前时间步 (最后一个)
+
+        # 计算 Attention score
+        attn_out = self.attentionLayer1(past_context)
+        attn_out = self.tanh1(attn_out)
+        attn_out = self.attention_dropout(attn_out)
+        attn_out = self.attentionLayer2(attn_out)  # -> (SeqLen-1, Batch, 1)
+
+        # 计算 Attention weights
+        attn_weights = self.softmax_attention(attn_out)  # 在时间维度 dim=0 做 softmax
+
+        # 加权求和
+        new_context_vector = torch.sum(attn_weights * past_context, dim=0)  # -> (Batch, Hidden)
+
+        # Skip connection: Attention结果 + 当前状态
+        new_context_vector = new_context_vector + current
+
+        # 5. 分类
+        logits = self.dense_layer(new_context_vector)
+        return logits,new_context_vector
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -393,90 +533,483 @@ def _pad_to_multiple(x: torch.Tensor, multiple: int, pad_value: float = 0.0):
 # Part 2: Teacher 1 - Soft Llama (LLM)
 # ==============================================================================
 class SoftLlamaTeacher(nn.Module):
-    def __init__(self, llm_path,adapter_path, codebook_weights, mask_token_id,device, temperature=2.0):
+    def __init__(self, llm_path, codebook_weights, device):
         super().__init__()
         self.device = device
-        self.temperature = temperature  # 新增：温度参数
 
-        print(f"[Teacher] Loading Llama from {llm_path}...")
-        # 加载 LLM 主体 (冻结)
         self.llm = AutoModelForCausalLM.from_pretrained(
             llm_path, torch_dtype=torch.float16, trust_remote_code=True
         ).to(device).eval()
-        for p in self.llm.parameters(): p.requires_grad = False
-
         self.tokenizer = AutoTokenizer.from_pretrained(llm_path)
+        for p in self.llm.parameters():
+            p.requires_grad = False
+
         self.llm_dim = self.llm.config.hidden_size
 
-        # 注册 Codebook (冻结)
-        self.register_buffer("codebook", codebook_weights.to(device))
+        self.register_buffer("codebook", codebook_weights.to(device))  # [K, Dvq]
         self.num_vq_codes = self.codebook.shape[0]
         self.vq_dim = self.codebook.shape[1]
 
-        # === 核心可训练组件 ===
-        # Projector: VQ维 -> LLM维
+        # 这两个是 teacher 唯一需要训练的部分（Stage1a）
         self.projector = nn.Linear(self.vq_dim, self.llm_dim).to(device)
-        # Output Head: LLM维 -> VQ分类维
         self.output_head = nn.Linear(self.llm_dim, self.num_vq_codes).to(device)
 
-        # === 1. Prompt 构建逻辑 (预计算) ===
-        # 我们构建一个固定的 System Prompt，将其编码并冻结，避免每次 Forward 重复计算
         self.system_prompt = "Analyze the following sensor sequence and predict the underlying pattern:"
-        self.prompt_input_ids = self.tokenizer(self.system_prompt, return_tensors="pt").input_ids.to(device)
-
+        prompt_ids = self.tokenizer(self.system_prompt, return_tensors="pt").input_ids.to(device)
         with torch.no_grad():
-            # 拿到 Prompt 的 Embedding: [1, L_text, D_llm]
-            self.prompt_embeds = self.llm.get_input_embeddings()(self.prompt_input_ids)
+            self.prompt_embeds = self.llm.get_input_embeddings()(prompt_ids)  # [1, Lp, D]
 
-        self.L_text = self.prompt_embeds.shape[1]  # 记录文本长度，用于后续切片
+    def forward(self, ids):  # ids: [B,P] 取值 [0..K-1]
+        B, P = ids.shape
+        ids = ids.clamp(0, self.num_vq_codes - 1)
 
-    def forward(self, gt_ids):
-        """
-        Args:
-            gt_ids: [B, L_sensor] VQ-VAE 的 Ground Truth Token IDs
-        Returns:
-            soft_probs: [B, L_sensor, num_vq_codes] 经过温度缩放的概率分布
-            logits: [B, L_sensor, num_vq_codes] 原始 Logits (可选，用于计算 Teacher 自身的 CE Loss)
-        """
-        B, L_sensor = gt_ids.shape
+        vq_embeds = F.embedding(ids, self.codebook)        # [B,P,Dvq]
+        sensor_embeds = self.projector(vq_embeds)          # [B,P,D]
 
-        # 1. 查表获取 VQ Embeddings
-        # [B, L_sensor] -> [B, L_sensor, VQ_Dim]
-        vq_embeds = F.embedding(gt_ids, self.codebook)
-
-        # 2. 投影到 LLM 空间
-        # [B, L_sensor, VQ_Dim] -> [B, L_sensor, LLM_Dim]
-        sensor_embeds = self.projector(vq_embeds)
-
-        # === 3. Prompt 拼接 ===
-        # 构造输入: [Prompt (L_text) + Sensor Data (L_sensor)]
-        # batch_prompt: [B, L_text, LLM_Dim]
         batch_prompt = self.prompt_embeds.expand(B, -1, -1)
-
-        # inputs_embeds: [B, L_text + L_sensor, LLM_Dim]
         inputs_embeds = torch.cat([batch_prompt, sensor_embeds], dim=1).to(self.llm.dtype)
 
-        # 4. LLM Forward
-        # 只需要 hidden_states，不需要计算原本的 causal loss
         outputs = self.llm(inputs_embeds=inputs_embeds, output_hidden_states=True)
-        # 取最后一层: [B, L_text + L_sensor, LLM_Dim]
-        last_hidden = outputs.hidden_states[-1]
+        last_hidden = outputs.hidden_states[-1]            # [B,Lp+P,D]
 
-        # === 5. 输出切片处理 ===
-        # 我们只关心 Sensor 部分的输出，扔掉 Prompt 部分
-        # [B, L_text + L_sensor, D] -> [B, L_sensor, D]
-        sensor_features = last_hidden[:, self.L_text:, :]
+        Lp = batch_prompt.shape[1]
+        sensor_hidden = last_hidden[:, Lp:, :]             # [B,P,D]
+        logits = self.output_head(sensor_hidden.float())   # [B,P,K]
+
+        # logits[:, t] 自然对应 next-token：p(z_{t+1} | z_{<=t})
+        return logits
+
+
+
+
+
+# ----------------------------
+# Teacher Adapter (Mean/Std -> K soft tokens in LLM embedding space)
+# ----------------------------
+class SoftTokenAdapter(nn.Module):
+    def __init__(self, in_dim: int, llm_embed_dim: int, num_soft_tokens: int = 4):
+        super().__init__()
+        self.in_dim = in_dim
+        self.llm_embed_dim = llm_embed_dim
+        self.num_soft_tokens = num_soft_tokens
+
+        # PH-LLM-like MLP: in -> 1024 -> 4096 -> 1024 -> (num_soft_tokens * D)
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, num_soft_tokens * llm_embed_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, in_dim]
+        B = x.shape[0]
+        out = self.net(x)  # [B, K*D]
+        out = out.view(B, self.num_soft_tokens, self.llm_embed_dim)  # [B, Ksoft, D]
+        return out
+
+
+# ----------------------------
+# Teacher = Frozen LLM + Adapter + Closed-set label scoring
+# ----------------------------
+
+class TeacherClassifier(nn.Module):
+    """
+    Closed-set classification with a frozen causal LM:
+      - Build prompt text from numeric summary
+      - Prepend learned soft tokens (adapter output) as prefix embeddings
+      - Score each candidate label by summing log-prob of its token(s) conditioned on prefix+prompt
+    """
+    def __init__(
+        self,
+        ds_cfg: Dict[str, Any],
+        llm_path: str,
+        feat_dim: int,
+        num_classes: int,
+        num_soft_tokens: int = 4,
+        label_strings: Optional[List[str]] = None,
+        device: str = "cuda",
+    ):
+        super().__init__()
+        self.device = device
+
+        self.ds_cfg = ds_cfg
+
+        # build maps
+        self.label_strings, self.id2name, self.letter2id, self.id2letter = _build_label_maps_from_ds_cfg(self.ds_cfg)
+
+        self.num_classes = int(self.ds_cfg.get("num_labels", len(self.label_strings)))
+
+
+
+
+        self.tokenizer = AutoTokenizer.from_pretrained(llm_path)
+        # distilgpt2 has no pad token by default
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.llm = AutoModelForCausalLM.from_pretrained(llm_path)
+        self.llm.to(device).eval()
+        for p in self.llm.parameters():
+            p.requires_grad = False
+
+        self.embed = self.llm.get_input_embeddings()
+        self.llm_embed_dim = self.embed.embedding_dim
+
+        self.adapter = SoftTokenAdapter(feat_dim * 2, self.llm_embed_dim, num_soft_tokens=num_soft_tokens).to(device)
+
+        # label_strings 就用 A-L（用于 score_labels 的候选集合）
+        # 你原来那段 label_strings None -> A,B,C... 可以删掉或直接覆盖：
+        self.label_strings = self.label_strings[:self.num_classes]
+
+        # Pre-tokenize label ids (can be multi-token)
+        self.label_token_ids: List[torch.Tensor] = []
+
+
+        self.output_head = nn.Linear(self.llm_embed_dim, self.num_classes).to(device)
+        # self.c = nn.Flatten(-1)
+        # self.output_head = nn.Sequential(
+        #     nn.Flatten(-1),
+        #     nn.Linear(self.llm_embed_dim * num_soft_tokens, self.num_classes)
+        # ).to(device)
+
+        for s in self.label_strings:
+            ids = self.tokenizer.encode(s, add_special_tokens=False)
+            if len(ids) == 0:
+                raise ValueError(f"Label string {s} tokenized to empty. Choose another label string.")
+            self.label_token_ids.append(torch.tensor(ids, dtype=torch.long))
+
+    @torch.no_grad()
+    def generate_reason_new(
+            self,
+            x: torch.Tensor,  # [B, feat_dim] ✅ 新增
+            soft_tokens: torch.Tensor,  # [B, Ksoft, D]
+            pred_ids: torch.Tensor,  # [B] class id in [0..K-1]
+            max_new_tokens: int = 48,
+    ) -> List[str]:
+        """
+        Generate explanation text (NOT used for training).
+        Conditioning: soft prefix + explain_prompt (built from x_row + predicted class id).
+        """
+        B = x.shape[0]
+        reasons: List[str] = []
+
+        for i in range(B):
+            pred_id = int(pred_ids[i].item())
+            expl_prompt = self.build_explain_prompt(x_row=x[i], pred_id=pred_id)
+
+            enc = self.tokenizer(expl_prompt, return_tensors="pt")
+            input_ids = enc["input_ids"].to(self.device)
+            attn_mask = enc["attention_mask"].to(self.device)
+
+            # prompt embeddings
+            prompt_emb = self.embed(input_ids)  # [1, L, D]
+
+            # concat soft prefix
+            inputs_embeds = torch.cat([soft_tokens[i:i + 1], prompt_emb], dim=1)  # [1, Ksoft+L, D]
+            prefix_mask = torch.ones((1, soft_tokens.shape[1]), dtype=attn_mask.dtype, device=self.device)
+            full_mask = torch.cat([prefix_mask, attn_mask], dim=1)
+
+            gen_ids = self.llm.generate(
+                inputs_embeds=inputs_embeds,
+                attention_mask=full_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,          # ✅ 给一点随机性，避免固定套话循环
+                temperature=0.7,
+                top_p=0.9,
+                num_beams=1,
+                repetition_penalty=1.15, # ✅ 抑制重复
+                no_repeat_ngram_size=4,  # ✅ 禁止4-gram重复
+                eos_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
+
+
+            text_all = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
+
+            # 解析：优先提取 "Reason:" 之后的内容；否则返回全文
+            if "Reason:" in text_all:
+                reason = text_all.split("Reason:")[-1].strip()
+            else:
+                reason = text_all.strip()
+
+            reasons.append(reason[:400])
+
+        return reasons
+
+    @torch.no_grad()
+    def generate_reason(
+            self,
+            soft_tokens: torch.Tensor,  # [B, Ksoft, D]
+            prompt_texts: List[str],  # len B (same as in build_prompt)
+            pred_ids: torch.Tensor,  # [B] predicted class index
+            max_new_tokens: int = 48,
+    ) -> List[str]:
+        """
+        Generate short explanation text conditioned on:
+          soft prefix tokens + prompt + 'Class: X\\nReason:'
+        This is NOT used for training.
+        """
+        B = len(prompt_texts)
+        reasons: List[str] = []
+
+        # We generate per-sample to keep logic simple & avoid padding edge cases
+        for i in range(B):
+            cls = self.label_strings[int(pred_ids[i].item())]
+
+            # Build an explanation prompt (grounded, short, avoid medical advice style)
+            # You can switch to a more "why-class" style if you prefer.
+            expl_prompt = (
+                    prompt_texts[i]
+                    + f" {cls}\n"
+                    + "Reason: Explain briefly using the provided summary values only "
+                      "(mention 1-3 key stats; avoid assumptions).\n"
+                    + "Reason:"
+            )
+
+            enc = self.tokenizer(expl_prompt, return_tensors="pt")
+            input_ids = enc["input_ids"].to(self.device)
+            attn_mask = enc["attention_mask"].to(self.device)
+
+            # Embeddings for prompt + soft prefix
+            prompt_emb = self.embed(input_ids)  # [1, L, D]
+            inputs_embeds = torch.cat([soft_tokens[i:i + 1], prompt_emb], dim=1)  # [1, Ksoft+L, D]
+            prefix_mask = torch.ones((1, soft_tokens.shape[1]), dtype=attn_mask.dtype, device=self.device)
+            full_mask = torch.cat([prefix_mask, attn_mask], dim=1)
+
+            gen_ids = self.llm.generate(
+                inputs_embeds=inputs_embeds,
+                attention_mask=full_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,  # deterministic (more reproducible)
+                num_beams=1,
+                eos_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
+
+            # Decode only the newly generated part.
+            # Because we used inputs_embeds, gen_ids includes generated token ids only for continuation.
+            # But some HF versions may include full sequence ids; safe approach: decode whole and strip prompt.
+            text_all = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
+
+            # Best-effort: extract substring after the last "Reason:"
+            if "Reason:" in text_all:
+                reason = text_all.split("Reason:")[-1].strip()
+            else:
+                reason = text_all.strip()
+
+            # Keep it short (avoid runaway)
+            reasons.append(reason[:400])
+
+        return reasons
+
+    @torch.no_grad()
+    def build_explain_prompt(self, x_row: torch.Tensor, pred_id: int) -> str:
+        sr = self.ds_cfg.get("sample_rate", None)
+        ch = self.ds_cfg.get("channel_num", None)
+        setup = []
+        if ch is not None: setup.append(f"{int(ch)}-channel IMU")
+        if sr is not None: setup.append(f"{int(sr)}Hz")
+        setup_str = ", ".join(setup) if setup else "IMU"
+
+        D = x_row.shape[0]
+        vals = x_row[: min(12, D)].tolist()
+        vals_str = ", ".join([f"{v:.3f}" for v in vals])
+
+        letter = self.id2letter[pred_id]
+        name = self.id2name[pred_id]
+
+        return (
+            "## Instruction: You are an expert in IMU-based HAR.\n"
+            f"## Sensor setup: {setup_str}.\n"
+            "## Input: statistical summaries (mean/variance) of IMU signals.\n"
+            f"Summary(first_dims): [{vals_str}]\n"
+            f"Predicted Class: {letter} ({pred_id}): {name}\n"
+            "Write exactly TWO lines:\n"
+            "Analysis: mention at least TWO numeric values from Summary(first_dims) and describe what they suggest.\n"
+            "Reason: justify the predicted class in one sentence, referencing at least ONE numeric value.\n"
+            "Do NOT repeat any sentence.\n"
+            "Analysis:"
+        )
+
+    def build_prompt(self, x: torch.Tensor) -> List[str]:
+        B, D = x.shape
+        sr = self.ds_cfg.get("sample_rate", None)
+        ch = self.ds_cfg.get("channel_num", None)
+
+        letters = self.label_strings[:self.num_classes]
+        letter_list = ", ".join(letters)
+
+        # category block
+        lines = []
+        for i in range(self.num_classes):
+            lines.append(f"{self.id2letter[i]} ({i}): {self.id2name[i]}")
+        cat_block = "\n".join(lines)
+
+        prompts = []
+        for i in range(B):
+            vals = x[i, : min(12, D)].tolist()
+            vals_str = ", ".join([f"{v:.3f}" for v in vals])
+
+            setup = []
+            if ch is not None: setup.append(f"{int(ch)}-channel IMU")
+            if sr is not None: setup.append(f"{int(sr)}Hz")
+            setup_str = ", ".join(setup) if setup else "IMU"
+            # new prompt
+            # prompts.append(
+            #     "## Instruction: You are an expert in IMU-based human activity recognition (HAR).\n"
+            #     f"## Sensor setup: {setup_str}.\n"
+            #     "## Input: statistical summaries (mean/variance) of IMU signals.\n"
+            #     f"Summary(first_dims): [{vals_str}]\n"
+            #     "## Candidate actions (choose exactly one):\n"
+            #     f"{cat_block}\n"
+            #     f"## Output format: Class: one of {letter_list}\n"
+            #     "Class:"
+            # )
+            prompts.append(
+                "Task: classify the activity from sensor summary.\n" f"Summary(first_dims): [{vals_str}]\n" "Answer:")
+        return prompts
+
+
+
+
+
+    def score_labels(
+        self,
+        soft_tokens: torch.Tensor,     # [B, Ksoft, D]
+        prompt_texts: List[str],       # len B
+        detach_llm: bool = False,  # True=推理省显存/不训adapter；False=训练adapter
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Returns:
+          scores: [B, Kclass]  (log-likelihood scores)
+          feat:   [B, D]       (teacher feature for distill: use hidden state at last prompt position)
+        """
+        ctx = torch.no_grad() if detach_llm else torch.enable_grad()
+        with ctx:
+            # print("grad_enabled:", torch.is_grad_enabled(), "inference_mode:", torch.is_inference_mode_enabled())
+            # print("soft_tokens.requires_grad:", soft_tokens.requires_grad)
+            # print("adapter any grad param:", any(p.requires_grad for p in self.adapter.parameters()))
+
+            B = len(prompt_texts)
+            K = self.num_classes
+
+            # Tokenize prompts
+            enc = self.tokenizer(
+                prompt_texts, return_tensors="pt", padding=True, truncation=True
+            )
+            input_ids = enc["input_ids"].to(self.device)          # [B, L]
+            attn_mask = enc["attention_mask"].to(self.device)     # [B, L]
+            L = input_ids.shape[1]
+
+            # Build embeddings for prompt tokens
+            prompt_emb = self.embed(input_ids)                    # [B, L, D]
+            # Concatenate soft prefix embeddings
+            inputs_embeds = torch.cat([soft_tokens, prompt_emb], dim=1)  # [B, Ksoft+L, D]
+            # Attention mask for prefix
+            prefix_mask = torch.ones((B, soft_tokens.shape[1]), dtype=attn_mask.dtype, device=self.device)
+            full_mask = torch.cat([prefix_mask, attn_mask], dim=1)       # [B, Ksoft+L]
+
+            # First run: get hidden states at end of prompt (feature)
+            out0 = self.llm(
+                inputs_embeds=inputs_embeds,
+                attention_mask=full_mask,
+                output_hidden_states=True,
+                use_cache=False,
+            )
+            # Feature: last hidden state at the last prompt token position (before label)
+            # position = Ksoft + (length_of_prompt_tokens - 1) for each sample (taking padding into account)
+            last_hidden = out0.hidden_states[-1]  # [B, Ksoft+L, D]
+            prompt_lens = attn_mask.sum(dim=1)    # [B]
+            pos = soft_tokens.shape[1] + (prompt_lens - 1)  # [B]
+            feat = last_hidden[torch.arange(B, device=self.device), pos, :]  # [B, D]
+
+
+            # Now compute label scores by conditioning on prefix+prompt and next tokens = label tokens.
+            # We do this by expanding batch for each class and appending label tokens.
+            max_label_len = max(len(t) for t in self.label_token_ids)
+            #
+            # Build expanded inputs for each (sample, class)
+            # expanded size: B*K
+            expand_BK = B * K
+            soft_rep = soft_tokens.unsqueeze(1).expand(B, K, soft_tokens.shape[1], soft_tokens.shape[2]).contiguous()
+            soft_rep = soft_rep.view(expand_BK, soft_tokens.shape[1], soft_tokens.shape[2])  # [BK, Ksoft, D]
+            prompt_emb_rep = prompt_emb.unsqueeze(1).expand(B, K, L, self.llm_embed_dim).contiguous()
+            prompt_emb_rep = prompt_emb_rep.view(expand_BK, L, self.llm_embed_dim)          # [BK, L, D]
+
+            inputs_embeds_BK = torch.cat([soft_rep, prompt_emb_rep], dim=1)                 # [BK, Ksoft+L, D]
+            full_mask_BK = full_mask.unsqueeze(1).expand(B, K, full_mask.shape[1]).contiguous()
+            full_mask_BK = full_mask_BK.view(expand_BK, full_mask.shape[1])                  # [BK, Ksoft+L]
+
+            # Create label token ids padded to max_label_len
+            label_ids = torch.full((K, max_label_len), fill_value=self.tokenizer.pad_token_id, dtype=torch.long)
+            label_valid = torch.zeros((K, max_label_len), dtype=torch.bool)
+            for ci, ids in enumerate(self.label_token_ids):
+                label_ids[ci, : len(ids)] = ids
+                label_valid[ci, : len(ids)] = True
+            # expand to BK
+            label_ids_BK = label_ids.unsqueeze(0).expand(B, K, max_label_len).contiguous().view(expand_BK, max_label_len)
+            label_valid_BK = label_valid.unsqueeze(0).expand(B, K, max_label_len).contiguous().view(expand_BK, max_label_len)
+
+            # We need embeddings for label tokens to append
+            label_emb_BK = self.embed(label_ids_BK.to(self.device))  # [BK, T, D]
+            inputs_embeds_BK2 = torch.cat([inputs_embeds_BK, label_emb_BK], dim=1)  # [BK, Ksoft+L+T, D]
+            # attention mask: label tokens all "present" (even pads) but we'll mask in scoring
+            label_mask = torch.ones((expand_BK, max_label_len), dtype=full_mask_BK.dtype, device=self.device)
+            attn_mask_BK2 = torch.cat([full_mask_BK, label_mask], dim=1)  # [BK, Ksoft+L+T]
+
+            out = self.llm(
+                inputs_embeds=inputs_embeds_BK2,
+                attention_mask=attn_mask_BK2,
+                use_cache=False,
+            )
+            logits = out.logits  # [BK, Ksoft+L+T, vocab]
+
+            # For causal LM, token t is predicted at position t-1.
+            # We want log P(label_token_j | prefix+prompt+previous label tokens)
+            # The first label token is predicted at position (Ksoft+L-1).
+            start = soft_tokens.shape[1] + L - 1
+            # Collect logprobs at each label position
+            logprobs = F.log_softmax(logits[:, start : start + max_label_len, :], dim=-1)  # [BK, T, vocab]
+            gather = logprobs.gather(dim=-1, index=label_ids_BK.to(self.device).unsqueeze(-1)).squeeze(-1)  # [BK, T]
+            # Mask out padded label positions
+            gather = gather * label_valid_BK.to(self.device).float()
+            scores_BK = gather.sum(dim=1)  # [BK]
+            scores = scores_BK.view(B, K)  # [B, K]
+        # prompt_lens = attn_mask.sum(dim=1)
+        # pos = soft_tokens.shape[1] + (prompt_lens - 1)
+        # feat = last_hidden[torch.arange(B, device=self.device), pos, :]  # [B, D]
 
         # 6. 映射回 VQ 空间
         # [B, L_sensor, Num_Codes]
-        logits = self.output_head(sensor_features.to(torch.float32))
+        # featc = self.c(feat)
+        # scores = self.output_head(feat.to(torch.float32))
 
-        # === 7. 温度处理 ===
-        # T > 1 会使分布更平滑 (Softer)，包含更多暗知识
-        # T < 1 会使分布更尖锐 (Sharper)
-        probs = F.softmax(logits / self.temperature, dim=-1)
+        return scores, feat
 
-        return probs, logits
+
+    def forward(self, x: torch.Tensor, return_reason: bool = False,detach_llm = False) -> TeacherOut:
+        x = x.to(self.device)
+        soft_tokens = self.adapter(x)  # [B, Ksoft, D]
+        prompts = self.build_prompt(x)
+        detach_llm = False # True=推理省显存/不训adapter；False=训练adapter
+        scores, feat = self.score_labels(soft_tokens, prompts,detach_llm=detach_llm)  # [B, K], [B, D]
+        probs = F.softmax(scores, dim=-1)
+
+        reason_text = None
+        if return_reason:
+            pred_ids = scores.argmax(dim=-1)  # [B] 这是“数字类ID”(0..K-1)，不是字母
+            reason_text = self.generate_reason(
+                x=x,  # ✅ 新增：传原始统计量
+                soft_tokens=soft_tokens,
+                pred_ids=pred_ids,
+                max_new_tokens=48,
+            )
+        return TeacherOut(logits=scores, probs=probs, feat=feat, reason_text=reason_text)
+
 
 # ==============================================================================
 # Part 3: Student Components (Conv Patch Embedding + Transformer)
@@ -563,6 +1096,118 @@ class StrongStudent(nn.Module):
         logits = self.vocab_head(feat)
         return logits, feat
 
+# ----------------------------
+# Loss for Stage2 (KD modes A/B/C)
+# ----------------------------
+def kd_loss(
+    student_logits: torch.Tensor,     # [B, K]
+    y: torch.Tensor,                 # [B]
+    teacher_logits: torch.Tensor,    # [B, K]
+    distill_mode: str = "A",         # "A"|"B"|"C"
+    T: float = 2.0,
+    lambda_kd: float = 1.0,
+    teacher_probs: Optional[torch.Tensor] = None,  # [B, K]
+    student_feat: Optional[torch.Tensor] = None,   # [B, d]
+    teacher_feat: Optional[torch.Tensor] = None,   # [B, D]
+    feat_proj: Optional[nn.Module] = None,
+    lambda_feat: float = 0.2,
+    conf_tau: float = 0.6,
+) -> Tuple[torch.Tensor, dict]:
+    """
+    A: CE + KL
+    B: CE + w * KL  (w from entropy or max prob)
+    C: CE + w * KL + feature distill
+    """
+    Bsz, K = student_logits.shape
+    L_ce = F.cross_entropy(student_logits, y)
+
+    # KD term
+    p_t = F.softmax(teacher_logits / T, dim=-1)
+    p_s = F.log_softmax(student_logits / T, dim=-1)
+    L_kd = F.kl_div(p_s, p_t, reduction="batchmean") * (T * T)
+
+    w = torch.ones((Bsz,), device=student_logits.device)
+    if distill_mode.upper() in ["B", "C"]:
+        if teacher_probs is None:
+            teacher_probs = F.softmax(teacher_logits, dim=-1)
+        # Option: entropy-based weight
+        H = entropy_from_probs(teacher_probs)              # [B]
+        w_ent = 1.0 - H / math.log(K)                      # normalized to [0,1] (roughly)
+        w_ent = torch.clamp(w_ent, 0.0, 1.0)
+        # Option: confidence thresholding using max prob
+        c = teacher_probs.max(dim=-1).values
+        w_thr = (c >= conf_tau).float()
+        # Combine: you can choose either; here we multiply for safety
+        w = w_ent * w_thr
+
+        # apply per-sample weighting to KD by scaling logits loss approx:
+        # simplest: scale batch KD by mean weight (stable)
+        L_kd = L_kd * (w.mean().detach())
+
+    total = L_ce + lambda_kd * L_kd
+    stats = {
+        "L_ce": float(L_ce.detach().cpu()),
+        "L_kd": float(L_kd.detach().cpu()),
+        "w_mean": float(w.mean().detach().cpu()),
+    }
+
+    # Feature distill for C
+    if distill_mode.upper() == "C":
+        if (student_feat is not None) and (teacher_feat is not None) and (feat_proj is not None):
+            s2t = feat_proj(student_feat)
+            s2t = F.normalize(s2t, dim=-1)
+            t = F.normalize(teacher_feat, dim=-1).to(s2t.device)
+            L_feat = F.mse_loss(s2t, t)
+            total = total + lambda_feat * L_feat
+            stats["L_feat"] = float(L_feat.detach().cpu())
+        else:
+            stats["L_feat"] = float("nan")
+
+    return total, stats
+import re
+from typing import Dict, Any, List, Tuple
+
+def _build_label_maps_from_ds_cfg(ds_cfg: Dict[str, Any]) -> Tuple[List[str], Dict[int, str], Dict[str, int], Dict[int, str]]:
+    """
+    Returns:
+      label_strings: ['A','B',...]
+      id2name: {0: 'Walking Forward', ...}  # stripped numbering
+      letter2id: {'A':0, ...}
+      id2letter: {0:'A', ...}
+    """
+    num_labels = int(ds_cfg.get("num_labels", 0))
+    if num_labels <= 0:
+        # fallback: infer from id2label length
+        id2label = ds_cfg.get("id2label", {})
+        num_labels = len(id2label)
+
+    # A, B, C ... (support >26 if you ever need)
+    letters = []
+    for i in range(num_labels):
+        if i < 26:
+            letters.append(chr(ord("A") + i))
+        else:
+            letters.append(f"CLASS{i}")  # fallback; for your 12-class it's A-L
+
+    # Parse id2label and strip leading "1." style numbering if present
+    raw = ds_cfg.get("id2label", {})
+    # yaml may load keys as int or str
+    id2name: Dict[int, str] = {}
+    for k, v in raw.items():
+        idx = int(k)
+        s = str(v).strip()
+        # remove leading "1.", "12.", "1)" etc.
+        s = re.sub(r"^\s*\d+\s*[\.\)\-:]\s*", "", s)
+        id2name[idx] = s
+
+    # If id2label is missing/incomplete, create placeholders
+    for i in range(num_labels):
+        if i not in id2name:
+            id2name[i] = f"Class{i}"
+
+    letter2id = {letters[i]: i for i in range(num_labels)}
+    id2letter = {i: letters[i] for i in range(num_labels)}
+    return letters, id2name, letter2id, id2letter
 
 # ==============================================================================
 # Part 4: Main Model (Fixed Logic)
@@ -596,6 +1241,8 @@ class Model(nn.Module):
                 if self.dataset_key not in cfg_all:
                     raise KeyError(f"{self.dataset_key} not in {ts_yaml}")
                 self.ds_cfg = cfg_all[self.dataset_key]
+
+
         self.device = args.device
         self.C = int(self.ds_cfg.get("channel_num", getattr(args, "enc_in", 15)))
         self.num_class = int(self.ds_cfg.get("num_labels", getattr(args, "num_class", 12)))
@@ -636,19 +1283,26 @@ class Model(nn.Module):
         self.mask_token_id = self.num_primitives
         self.dim_student = int(getattr(args, "dim_student", 256))
 
-        self.student = StrongStudent(
-            seq_len_pad=self.seq_len_pad,  # Pass Padded Length
-            patch_len=self.patch_len,
-            in_channels=self.C,
-            dim_model=self.dim_student,
-            num_vq_codes=self.num_primitives,
-            nhead=4,
-            num_layers=4
-        ).to(self.device)
+        # self.student = StrongStudent(
+        #     seq_len_pad=self.seq_len_pad,  # Pass Padded Length
+        #     patch_len=self.patch_len,
+        #     in_channels=self.C,
+        #     dim_model=self.dim_student,
+        #     num_vq_codes=self.num_primitives,
+        #     nhead=4,
+        #     num_layers=4
+        # ).to(self.device)
+
+        self.student = DeepConvLSTMAttention(args=args).to(self.device)
+
         self.mask_rate=args.mask_rate
         # --- 4. Initialize Teacher 2 (SoftLlama) ---
         self.lambda_distill = float(getattr(args, "lambda_distill", 1))
         self.teacher = None
+        self.train_mode = str(getattr(args, "train_mode", "student_distill_B"))
+        # 可选： "teacher_lm", "student_ce", "student_distill_B"
+        self.distill_temp = float(getattr(args, "distill_temp", 2.0))
+        self.ss_ratio = float(getattr(args, "ss_ratio", -0.5))  # scheduled sampling: 用 gt 的概率
 
         if self.stage == 1 and hasattr(args, 'llama_name'):
             # Load Codebook safely
@@ -663,11 +1317,14 @@ class Model(nn.Module):
             alignment_path = self.ds_cfg.get("alignment_path", None)
             adapter_path = alignment_path+ os.sep + "best_wrapper.pth"
             adapter_path = None
-            self.teacher = SoftLlamaTeacher(
+            self.teacher = TeacherClassifier(
+                ds_cfg=self.ds_cfg,
                 llm_path=args.llama_name,
-                adapter_path=adapter_path,
-                codebook_weights=codebook_weights,
-                mask_token_id=self.mask_token_id,
+                feat_dim=self.C,
+                num_classes=self.num_class,
+                # adapter_path=adapter_path,
+                # codebook_weights=codebook_weights,
+                # mask_token_id=self.mask_token_id,
                 device=self.device
             )
 
@@ -695,23 +1352,16 @@ class Model(nn.Module):
         noise = torch.rand(B, P, device=self.device)
         return noise < mask_ratio
 
-    def forward(self, x_imu, padding_mask=None, mode=None, labels=None):
-        if mode is None:
-            mode = "pretrain" if self.stage == 1 else "classify"
+    def forward(self, x_imu, padding_mask=None, mode=None, labels=None,mean=None,var=None):
 
         if not torch.is_tensor(x_imu): x_imu = torch.as_tensor(x_imu)
         B, L_orig, C = x_imu.shape
 
-        # ===========================================================
-        # Step 0: 统一 Padding (关键!)
-        # 1. Pad 输入数据到 VQ Stride 的倍数
+
         # ===========================================================
         x_pad, L_pad = _pad_to_multiple(x_imu, self.vq_stride, pad_value=0.0)
-        # x_pad: [B, seq_len_pad, C]
+        x_pad =x_imu
 
-        # 2. 生成 Loss Mask (用于忽略 Padding 区域的 Loss)
-        # L_orig 是原始有效长度。计算有多少个 Patch 是有效的。
-        # 例如: Orig=195, Stride=8 -> 24 个有效 Patch (24*8=192), 第 25 个 Patch 包含填充数据
         valid_patches = L_orig // self.patch_len
         loss_valid_mask = torch.zeros((B, self.P), device=self.device, dtype=torch.bool)
         loss_valid_mask[:, :valid_patches] = True
@@ -720,80 +1370,72 @@ class Model(nn.Module):
         # Stage 1: Pretrain
         # ====================
         if self.stage == 1:
-            with torch.no_grad():
-                # VQ-VAE 的 get_token_ids 必须接收 Pad 后的数据
-                # 如果你的 VQ-VAE 内部没有自动 Pad，这里传 x_pad 是最安全的
-                gt_ids = self.vq_net.get_token_ids(x_pad)
 
-                # 安全断言：确保 VQ 输出的 Token 数与 Student 的 Patch 数对齐
-            if gt_ids.shape[1] != self.P:
-                # 容错：如果 VQ 内部处理导致稍微多了点，强行截断对齐
-                if gt_ids.shape[1] > self.P:
-                    gt_ids = gt_ids[:, :self.P]
-                else:
-                    raise ValueError(f"VQ Tokens {gt_ids.shape[1]} < Student Patches {self.P}")
+            assert self.teacher is not None, "Need teacher for teacher_lm mode"
+            # t_logits = self.teacher(gt_ids[:, :V])[:, :V - 1, :]  # [B,V-1,K]
+            # detach_llm # True=推理省显存/不训adapter；False=训练adapter
 
-            # 生成 Masking (BEiT 任务)
-            mask_bool = self.random_masking(x_pad.size(0), self.P, self.mask_rate)
-            # mask_bool = self.random_masking(x_pad.size(0), self.P, 0.4)
 
-            # Student Forward
-            student_logits, _ = self.student(x_pad, mask_bool)  # [B, P, K]
+            # -------- train_mode 1: teacher_lm --------
+            if self.train_mode == "teacher_lm":
+                tout = self.teacher(torch.cat([mean, var], dim=-1), return_reason=False, detach_llm=False)  # [B,V-1,K]
+                tlogits = tout.logits
+                tprobs = tout.probs
+                tfeat = tout.feat
+                treason = tout.reason_text
+                teacher_loss = F.cross_entropy(tlogits, labels)
+                return teacher_loss,None,treason # 1.9519
 
-            # --- Calculation with Loss Mask ---
-            # 只有 (被 Mask 的位置) AND (不是 Padding 的位置) 才计算 Loss
-            final_mask = mask_bool & loss_valid_mask
 
-            target_masked = gt_ids[final_mask]
-            pred_masked = student_logits[final_mask]
 
-            if target_masked.numel() > 0:
-                loss_recon = F.cross_entropy(pred_masked, target_masked)
-            else:
-                loss_recon = torch.tensor(0.0, device=self.device, requires_grad=True)
 
-            # Distill Loss
-            loss_distill = torch.tensor(0.0, device=self.device)
-            if self.teacher is not None and self.lambda_distill > 0:
-                # teacher_input_ids = gt_ids.clone()
-                # teacher_input_ids[mask_bool] = self.mask_token_id
+            # Student forward (NO MASK) for both student_ce and student_distill_B
+            student_logits, sfeat  = self.student(x_pad)  # [B,P,K]
+            tout = self.teacher(torch.cat([mean, var], dim=-1), return_reason=False, detach_llm=True)  # [B,V-1,K]
+            tlogits = tout.logits
+            tprobs = tout.probs
+            tfeat = tout.feat
+            # -------- train_mode 2: student_ce --------
+            feat_proj = None
+            loss, stats = kd_loss(
+                student_logits=student_logits,
+                y=labels,
+                teacher_logits=tlogits.detach(),
+                distill_mode='A', #" A or B"
+                T=2.0,
+                lambda_kd=1.0,
+                teacher_probs=tprobs.detach(),
+                student_feat=sfeat,
+                teacher_feat=tfeat.detach(),
+                feat_proj=feat_proj,
+                lambda_feat=0.2,
+                conf_tau=0.6,
+            )
 
-                # 1. 获取 Teacher 输出
-                t_probs, t_logits = self.teacher(gt_ids)
 
-                # 2. 计算 Teacher 自身的重构 Loss (确保 Teacher 并没有在乱讲)
-                # Teacher 也要努力预测正确的 gt_ids
-                loss_teacher_recon = F.cross_entropy(t_logits.view(-1, self.num_primitives), gt_ids.view(-1))
 
-                s_log_probs = F.log_softmax(student_logits[final_mask], dim=-1)
-                t_probs = t_probs[final_mask].detach()
 
-                if s_log_probs.numel() > 0:
-                    loss_distill = F.kl_div(s_log_probs, t_probs.detach(), reduction='batchmean')
-            loss_total = loss_recon + self.lambda_distill * loss_distill + loss_teacher_recon
 
-            return loss_total, student_logits, {
-                "loss_recon": loss_recon.item(),
-                "loss_distill": loss_distill.item(),
-                "loss_total": loss_total.item()
-            }
+            return loss, student_logits, stats
+
 
         # ====================
         # Stage 2: Classify
         # ====================
         elif self.stage == 2:
             # Student Forward
-            _, feat = self.student(x_pad, mask_bool=None)  # [B, P, D]
+            logits, feat = self.student(x_pad)  # [B, P, D]
 
             # --- Pooling with Mask ---
             # 只对有效的 Patch 进行平均，忽略 Padding 部分
             # feat: [B, P, D] -> [B, valid_patches, D]
-            feat_valid = feat[:, :valid_patches, :]
-
-            # Global Pooling
-            global_feat = feat_valid.mean(dim=1)  # [B, D]
-
-            logits = self.classifier(global_feat)  # [B, num_class]
+            # feat_valid = feat[:, :valid_patches, :]
+            #
+            # # Global Pooling
+            # global_feat = feat_valid.mean(dim=1)  # [B, D]
+            #
+            # logits = self.classifier(global_feat)  # [B, num_class]
+            # logits = feat
             return logits
 
     def save_wrapper(self, path):
@@ -813,6 +1455,25 @@ class Model(nn.Module):
         sd = {k: v for k, v in sd.items() if "vq_net" not in k and "teacher" not in k}
         self.load_state_dict(sd, strict=False)
         print("Loaded Student weights.")
+
+
+    def save_teacher_head(self, path):
+        assert self.teacher is not None
+        sd = {
+            "adapter": self.teacher.adapter.state_dict(),
+            "output_head": self.teacher.output_head.state_dict(),
+        }
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save(sd, path)
+        print(f"Saved teacher head to {path}")
+
+    def load_teacher_head(self, path, map_location="cpu"):
+        assert self.teacher is not None
+        ckpt = torch.load(path, map_location=map_location)
+        self.teacher.adapter.load_state_dict(ckpt["adapter"], strict=True)
+        self.teacher.output_head.load_state_dict(ckpt["output_head"], strict=True)
+        print(f"Loaded teacher head from {path}")
+
 def get_configs():
     import random
     import numpy as np

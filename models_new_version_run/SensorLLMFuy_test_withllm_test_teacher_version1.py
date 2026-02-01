@@ -123,13 +123,7 @@ try:
 except Exception:
     yaml = None
 
-# models/SensorLLMResampler.py (Route A - Scientific MAE)
-import os
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from typing import Any, Dict, List, Optional, Tuple
-from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # 禁用 fused attention 以兼容性优先
 torch.backends.cuda.enable_flash_sdp(False)
@@ -393,90 +387,49 @@ def _pad_to_multiple(x: torch.Tensor, multiple: int, pad_value: float = 0.0):
 # Part 2: Teacher 1 - Soft Llama (LLM)
 # ==============================================================================
 class SoftLlamaTeacher(nn.Module):
-    def __init__(self, llm_path,adapter_path, codebook_weights, mask_token_id,device, temperature=2.0):
+    def __init__(self, llm_path, codebook_weights, device):
         super().__init__()
         self.device = device
-        self.temperature = temperature  # 新增：温度参数
 
-        print(f"[Teacher] Loading Llama from {llm_path}...")
-        # 加载 LLM 主体 (冻结)
         self.llm = AutoModelForCausalLM.from_pretrained(
             llm_path, torch_dtype=torch.float16, trust_remote_code=True
         ).to(device).eval()
-        for p in self.llm.parameters(): p.requires_grad = False
-
         self.tokenizer = AutoTokenizer.from_pretrained(llm_path)
-        self.llm_dim = self.llm.config.hidden_size
+        for p in self.llm.parameters():
+            p.requires_grad = False
 
-        # 注册 Codebook (冻结)
-        self.register_buffer("codebook", codebook_weights.to(device))
+        self.llm_dim = self.llm.config.hidden_size
+        self.register_buffer("codebook", codebook_weights.to(device))  # [K, Dvq]
         self.num_vq_codes = self.codebook.shape[0]
         self.vq_dim = self.codebook.shape[1]
 
-        # === 核心可训练组件 ===
-        # Projector: VQ维 -> LLM维
         self.projector = nn.Linear(self.vq_dim, self.llm_dim).to(device)
-        # Output Head: LLM维 -> VQ分类维
         self.output_head = nn.Linear(self.llm_dim, self.num_vq_codes).to(device)
 
-        # === 1. Prompt 构建逻辑 (预计算) ===
-        # 我们构建一个固定的 System Prompt，将其编码并冻结，避免每次 Forward 重复计算
-        self.system_prompt = "Analyze the following sensor sequence and predict the underlying pattern:"
-        self.prompt_input_ids = self.tokenizer(self.system_prompt, return_tensors="pt").input_ids.to(device)
-
+        self.system_prompt = "Analyze sensor sequence:"
+        prompt_ids = self.tokenizer(self.system_prompt, return_tensors="pt").input_ids.to(device)
         with torch.no_grad():
-            # 拿到 Prompt 的 Embedding: [1, L_text, D_llm]
-            self.prompt_embeds = self.llm.get_input_embeddings()(self.prompt_input_ids)
+            self.prompt_embeds = self.llm.get_input_embeddings()(prompt_ids)  # [1, Lp, D]
 
-        self.L_text = self.prompt_embeds.shape[1]  # 记录文本长度，用于后续切片
+    def forward(self, ids):  # ids: [B, P] in [0..K-1]
+        B, P = ids.shape
+        ids = ids.clamp(0, self.num_vq_codes - 1)
 
-    def forward(self, gt_ids):
-        """
-        Args:
-            gt_ids: [B, L_sensor] VQ-VAE 的 Ground Truth Token IDs
-        Returns:
-            soft_probs: [B, L_sensor, num_vq_codes] 经过温度缩放的概率分布
-            logits: [B, L_sensor, num_vq_codes] 原始 Logits (可选，用于计算 Teacher 自身的 CE Loss)
-        """
-        B, L_sensor = gt_ids.shape
+        vq_embeds = F.embedding(ids, self.codebook)        # [B,P,Dvq]
+        sensor_embeds = self.projector(vq_embeds)          # [B,P,D]
 
-        # 1. 查表获取 VQ Embeddings
-        # [B, L_sensor] -> [B, L_sensor, VQ_Dim]
-        vq_embeds = F.embedding(gt_ids, self.codebook)
-
-        # 2. 投影到 LLM 空间
-        # [B, L_sensor, VQ_Dim] -> [B, L_sensor, LLM_Dim]
-        sensor_embeds = self.projector(vq_embeds)
-
-        # === 3. Prompt 拼接 ===
-        # 构造输入: [Prompt (L_text) + Sensor Data (L_sensor)]
-        # batch_prompt: [B, L_text, LLM_Dim]
         batch_prompt = self.prompt_embeds.expand(B, -1, -1)
-
-        # inputs_embeds: [B, L_text + L_sensor, LLM_Dim]
         inputs_embeds = torch.cat([batch_prompt, sensor_embeds], dim=1).to(self.llm.dtype)
 
-        # 4. LLM Forward
-        # 只需要 hidden_states，不需要计算原本的 causal loss
         outputs = self.llm(inputs_embeds=inputs_embeds, output_hidden_states=True)
-        # 取最后一层: [B, L_text + L_sensor, LLM_Dim]
-        last_hidden = outputs.hidden_states[-1]
+        last_hidden = outputs.hidden_states[-1]            # [B, Lp+P, D]
 
-        # === 5. 输出切片处理 ===
-        # 我们只关心 Sensor 部分的输出，扔掉 Prompt 部分
-        # [B, L_text + L_sensor, D] -> [B, L_sensor, D]
-        sensor_features = last_hidden[:, self.L_text:, :]
+        Lp = batch_prompt.shape[1]
+        sensor_hidden = last_hidden[:, Lp:, :]             # [B,P,D]
+        logits = self.output_head(sensor_hidden.float())   # [B,P,K]
 
-        # 6. 映射回 VQ 空间
-        # [B, L_sensor, Num_Codes]
-        logits = self.output_head(sensor_features.to(torch.float32))
-
-        # === 7. 温度处理 ===
-        # T > 1 会使分布更平滑 (Softer)，包含更多暗知识
-        # T < 1 会使分布更尖锐 (Sharper)
-        probs = F.softmax(logits / self.temperature, dim=-1)
-
-        return probs, logits
+        # logits[:, t] 对应 p(z_{t+1} | z_{<=t}) 更自然（因果LM）
+        return logits
 
 # ==============================================================================
 # Part 3: Student Components (Conv Patch Embedding + Transformer)
@@ -665,9 +618,9 @@ class Model(nn.Module):
             adapter_path = None
             self.teacher = SoftLlamaTeacher(
                 llm_path=args.llama_name,
-                adapter_path=adapter_path,
+                # adapter_path=adapter_path,
                 codebook_weights=codebook_weights,
-                mask_token_id=self.mask_token_id,
+                # mask_token_id=self.mask_token_id,
                 device=self.device
             )
 
@@ -721,62 +674,61 @@ class Model(nn.Module):
         # ====================
         if self.stage == 1:
             with torch.no_grad():
-                # VQ-VAE 的 get_token_ids 必须接收 Pad 后的数据
-                # 如果你的 VQ-VAE 内部没有自动 Pad，这里传 x_pad 是最安全的
-                gt_ids = self.vq_net.get_token_ids(x_pad)
-
-                # 安全断言：确保 VQ 输出的 Token 数与 Student 的 Patch 数对齐
+                gt_ids = self.vq_net.get_token_ids(x_pad)  # [B,P]
             if gt_ids.shape[1] != self.P:
-                # 容错：如果 VQ 内部处理导致稍微多了点，强行截断对齐
-                if gt_ids.shape[1] > self.P:
-                    gt_ids = gt_ids[:, :self.P]
-                else:
-                    raise ValueError(f"VQ Tokens {gt_ids.shape[1]} < Student Patches {self.P}")
+                gt_ids = gt_ids[:, :self.P]
 
-            # 生成 Masking (BEiT 任务)
-            mask_bool = self.random_masking(x_pad.size(0), self.P, self.mask_rate)
-            # mask_bool = self.random_masking(x_pad.size(0), self.P, 0.4)
+            # ---------- Next-token slicing ----------
+            # 有效 patch 数 valid_patches，next-token 只能算到 valid_patches-1
+            V = max(0, valid_patches)
+            if V < 2:
+                loss_total = torch.tensor(0.0, device=self.device, requires_grad=True)
+                return loss_total, None, {"loss_recon": 0.0, "loss_distill": 0.0, "loss_total": 0.0}
 
-            # Student Forward
-            student_logits, _ = self.student(x_pad, mask_bool)  # [B, P, K]
+            # Student forward (NO MASK)
+            student_logits, _ = self.student(x_pad, mask_bool=None)  # [B,P,K]
 
-            # --- Calculation with Loss Mask ---
-            # 只有 (被 Mask 的位置) AND (不是 Padding 的位置) 才计算 Loss
-            final_mask = mask_bool & loss_valid_mask
+            # logits predict z_{t+1}, so use t in [0..V-2]
+            s_logits = student_logits[:, :V - 1, :]  # [B,V-1,K]
+            targets = gt_ids[:, 1:V]  # [B,V-1]
 
-            target_masked = gt_ids[final_mask]
-            pred_masked = student_logits[final_mask]
+            # CE(next-token)
+            loss_recon = F.cross_entropy(
+                s_logits.reshape(-1, s_logits.size(-1)),
+                targets.reshape(-1)
+            )
 
-            if target_masked.numel() > 0:
-                loss_recon = F.cross_entropy(pred_masked, target_masked)
-            else:
-                loss_recon = torch.tensor(0.0, device=self.device, requires_grad=True)
-
-            # Distill Loss
+            # ---------- Distill ----------
             loss_distill = torch.tensor(0.0, device=self.device)
+
             if self.teacher is not None and self.lambda_distill > 0:
-                # teacher_input_ids = gt_ids.clone()
-                # teacher_input_ids[mask_bool] = self.mask_token_id
+                # 你可以先用 A：teacher 看 gt_ids（更稳），再切 B
+                # A (teacher on gt tokens):
+                # t_logits = self.teacher(gt_ids[:, :V])[:, :V-1, :]  # [B,V-1,K]
 
-                # 1. 获取 Teacher 输出
-                t_probs, t_logits = self.teacher(gt_ids)
+                # B (teacher on student predicted tokens):
+                with torch.no_grad():
+                    pred_ids = torch.argmax(student_logits[:, :V, :], dim=-1)  # [B,V]
+                t_logits = self.teacher(pred_ids)[:, :V - 1, :]  # [B,V-1,K]
+                # 加上自己的损失--
+                # loss_teacher_recon = F.cross_entropy(t_logits.view(-1, self.num_primitives), gt_ids.view(-1))
 
-                # 2. 计算 Teacher 自身的重构 Loss (确保 Teacher 并没有在乱讲)
-                # Teacher 也要努力预测正确的 gt_ids
-                loss_teacher_recon = F.cross_entropy(t_logits.view(-1, self.num_primitives), gt_ids.view(-1))
+                T = float(getattr(self.args, "distill_temp", 1.0))
+                s_logp = F.log_softmax(s_logits / T, dim=-1)
+                t_prob = F.softmax(t_logits / T, dim=-1).detach()
 
-                s_log_probs = F.log_softmax(student_logits[final_mask], dim=-1)
-                t_probs = t_probs[final_mask].detach()
+                # KL(student || teacher)
+                loss_distill = F.kl_div(s_logp, t_prob, reduction="batchmean") * (T * T)
 
-                if s_log_probs.numel() > 0:
-                    loss_distill = F.kl_div(s_log_probs, t_probs.detach(), reduction='batchmean')
-            loss_total = loss_recon + self.lambda_distill * loss_distill + loss_teacher_recon
+            loss_total = loss_recon + self.lambda_distill * loss_distill
 
             return loss_total, student_logits, {
                 "loss_recon": loss_recon.item(),
                 "loss_distill": loss_distill.item(),
-                "loss_total": loss_total.item()
+                "loss_total": loss_total.item(),
+                "valid_patches": int(V)
             }
+
 
         # ====================
         # Stage 2: Classify

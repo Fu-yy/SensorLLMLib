@@ -15,6 +15,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, SequentialLR
 
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
+from models_new_version_run.VQ_VAE import validate_vqvae
 from utils.tools import EarlyStopping, cal_accuracy
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.metrics import confusion_matrix
@@ -1104,7 +1105,7 @@ class Exp_VQ_VAE_Classification(Exp_Basic):
         criterion = self._select_criterion(train_loader=train_loader)
 
         # early stop: default monitor acc (same as V1)
-        monitor = str(getattr(self.args, "monitor", "acc")).lower()
+        monitor = str(getattr(self.args, "monitor", "loss")).lower()
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
         train_steps = len(train_loader)
@@ -1198,6 +1199,14 @@ class Exp_VQ_VAE_Classification(Exp_Basic):
             # #          f"time:{time.time() - epoch_time:.1f}s")
 
             # early stopping
+
+
+
+            ####################################
+            validate_vqvae(self.model, train_loader, device=self.args.device)
+            ####################################
+
+
             if monitor == "loss":
                 early_stopping(val_loss, self.model, path)
             else:

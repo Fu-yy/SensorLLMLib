@@ -7,6 +7,17 @@ from openpyxl.styles import Font, Border, Side
 
 
 # ================= 辅助函数 =================
+def read_lines_auto(path):
+    encodings = ["utf-8", "utf-8-sig", "gb18030", "gbk"]
+    for enc in encodings:
+        try:
+            with open(path, "r", encoding=enc) as f:
+                return f.readlines(), enc
+        except UnicodeDecodeError:
+            continue
+    # 兜底：无论如何读出来，但可能会丢字符
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        return f.readlines(), "utf-8(ignore)"
 
 def get_stats(values, confidence=0.95):
     """ 计算均值和标准差 """
@@ -89,25 +100,23 @@ def process_logs(root_folder, output_excel):
                 data_store[dataset_name] = {}
 
             try:
-                with open(log_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        # --- 修改点 1: 全局扫描模型名称 ---
-                        # 无论这一行有没有 [Stage2-Test]，都要检查是不是配置行
-                        if detected_model_name is None:
-                            model_str = extract_model_name_from_line(line)
-                            if model_str:
-                                detected_model_name = model_str
-                                print(f"  -> 成功提取模型名称: {detected_model_name}")
+                lines, used_enc = read_lines_auto(log_path)
+                # 你想的话可以打印一次看看用的什么编码
+                # print(f"[OK] {log_path} encoding={used_enc}")
 
-                        # --- 修改点 2: 提取测试数据 ---
-                        # 只有包含 target_prefix 的行才包含 loss, acc 等数据
-                        if target_prefix in line:
-                            content = line.split(target_prefix)[1]
-                            metrics = extract_metrics_from_line(content)
-                            for k, v in metrics.items():
-                                if k not in data_store[dataset_name]:
-                                    data_store[dataset_name][k] = []
-                                data_store[dataset_name][k].append(v)
+                for line in lines:
+                    if detected_model_name is None:
+                        model_str = extract_model_name_from_line(line)
+                        if model_str:
+                            detected_model_name = model_str
+                            print(f"  -> 成功提取模型名称: {detected_model_name}")
+
+                    if target_prefix in line:
+                        content = line.split(target_prefix)[1]
+                        metrics = extract_metrics_from_line(content)
+                        for k, v in metrics.items():
+                            data_store[dataset_name].setdefault(k, []).append(v)
+
             except Exception as e:
                 print(f"读取出错: {log_path} -> {e}")
 
@@ -178,13 +187,40 @@ if __name__ == "__main__":
 
 
 
-    ROOT_DIRECTORY = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260120_194435"
-    OUTPUT_FILE = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260120_194435_experiment_results.xlsx"
+    ROOT_DIRECTORY1 = r"/root/autodl-tmp/comp_data/run_log/batch_20260121_124948"
+    ROOT_DIRECTORY2 = r"/root/autodl-tmp/comp_data/run_log/batch_20260121_212504"
+    ROOT_DIRECTORY3 = r"/root/autodl-tmp/comp_data/run_log/batch_20260123_214048"
+    ROOT_DIRECTORY4 = r"D:\fuy\测试掩码maskrate的日志和权重文件\comp_data\run_log\batch_20260123_215517_gpt4ts"
+    ROOT_DIRECTORY5 = r"/root/autodl-tmp/comp_data/run_log/batch_20260123_224159"
+    ROOT_DIRECTORY6 = r"/root/autodl-tmp/comp_data/run_log/batch_20260124_011542"
+    OUTPUT_FILE1 = r"/root/autodl-tmp/comp_data/run_log/batch_20260121_124948_experiment_results.xlsx"
+    OUTPUT_FILE2 = r"/root/autodl-tmp/comp_data/run_log/batch_20260121_212504_experiment_results.xlsx"
+    OUTPUT_FILE3 = r"/root/autodl-tmp/comp_data/run_log/batch_20260123_214048_experiment_results.xlsx"
+    OUTPUT_FILE4 = r"D:\fuy\测试掩码maskrate的日志和权重文件\comp_data\run_log\batch_20260123_215517_gpt4ts_experiment_results.xlsx"
+    OUTPUT_FILE5 = r"/root/autodl-tmp/comp_data/run_log/batch_20260123_224159_experiment_results.xlsx"
 
-    # ROOT_DIRECTORY_02 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260117_210057"
-    # OUTPUT_FILE_02 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260117_210057_experiment_results.xlsx"
+
+
+    ROOT_DIRECTORY6 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260128_095234"
+    ROOT_DIRECTORY6 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260128_235742_confidence"
+
+    OUTPUT_FILE6 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260128_095234_experiment_results.xlsx"
+    OUTPUT_FILE6 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260128_235742_confidence_experiment_results.xlsx"
+
+    # ROOT_DIRECTORY_02 = r"/root/autodl-tmp/comp_data/run_log/batch_20260117_210057"
+    # OUTPUT_FILE_02 = r"/root/autodl-tmp/comp_data/run_log/batch_20260117_210057_experiment_results.xlsx"
 
     # ===========================================
 
-    if os.path.exists(ROOT_DIRECTORY):
-        process_logs(ROOT_DIRECTORY, OUTPUT_FILE)
+    # if os.path.exists(ROOT_DIRECTORY1):
+    #     process_logs(ROOT_DIRECTORY1, OUTPUT_FILE1)
+    # if os.path.exists(ROOT_DIRECTORY2):
+    #     process_logs(ROOT_DIRECTORY2, OUTPUT_FILE2)
+    # if os.path.exists(ROOT_DIRECTORY3):
+    #     process_logs(ROOT_DIRECTORY3, OUTPUT_FILE3)
+    if os.path.exists(ROOT_DIRECTORY6):
+        process_logs(ROOT_DIRECTORY6, OUTPUT_FILE6)
+    # if os.path.exists(ROOT_DIRECTORY5):
+    #     process_logs(ROOT_DIRECTORY5, OUTPUT_FILE5)
+    # if os.path.exists(ROOT_DIRECTORY6):
+    #     process_logs(ROOT_DIRECTORY6, OUTPUT_FILE6)

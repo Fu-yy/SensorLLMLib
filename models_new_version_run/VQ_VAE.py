@@ -814,7 +814,148 @@ class IMU_VQ_Model(nn.Module):
         self.load_state_dict(sd, strict=False)
 
 
+
+
+# --task_name=lora
+# --task_name=classification
+# --task_name=vqvae
+# --is_training=1
+# --root_path="D:/fuy/MyCode/SensorLLMLib/datasets/MHEALTHDATASET"
+# --root_path="D:/fuy/MyCode/SensorLLMLib/datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset"
+# --model_id=UCIHAR
+# --run_id="alignment_weight"
+# --datasets=UCIHAR
+# --model="SensorLoRA"
+# --model="SensorLLMFuy_test_withllm_mae_vqvae"
+# --model="VQVAE"
+# --data=UCIHAR
+# --dataset_key=ucihar
+# --seq_len=200
+# --patch_len=64
+# --stride=64
+# --stage=1
+# --batch_size=32
+# --llama_name="D:\fuy\MyCode\Llama-3.2-1B"
+# --learning_rate=0.001
+# --train_epochs=10
+# --num_workers=0
+# --vqvae_path=qua_recon_path
+# --test_subjects="subject1,subject3,subject6"
+# --mask_rate=0.75
+# --itr=1
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def validate_vqvae(model, test_loader, device="cuda"):
+    """
+    验证 VQ-VAE 效果的核心函数
+    """
+    model.eval()
+    model.to(device)
+
+    total_mse = 0
+    total_samples = 0
+    all_tokens = []
+
+    # 1. 只需要跑一个 Batch 来看效果即可，或者跑整个测试集
+    with torch.no_grad():
+        for batch_idx, (data, _) in enumerate(test_loader):  # 假设 dataloader 返回 (data, label)
+            data = data.to(device).float()
+
+            # 前向传播
+            # 注意：你的 forward 返回值是: finel_loss, x_out, metrics
+            loss, x_recon, metrics = model(data)
+
+            # 收集重建误差
+            # x_recon: [B, L, C], data: [B, L, C]
+            mse = F.mse_loss(x_recon, data, reduction='sum')
+            total_mse += mse.item()
+            total_samples += data.numel()
+
+            # 收集 Token 使用情况 (检查是否坍塌)
+            # 使用你写的 get_token_ids 方法
+            token_ids = model.get_token_ids(data)  # [B, T_compressed]
+            all_tokens.append(token_ids.cpu().numpy().flatten())
+
+            # --- 可视化第一个 Batch 的第一个样本 ---
+            if batch_idx == 0:
+                visualize_reconstruction(data, x_recon, sample_idx=0, channel_idx=0)
+
+            # 为了演示，只跑一个 batch 就 break，实际验证可以跑完
+            break
+
+            # 2. 统计 Token 利用率
+    all_tokens = np.concatenate(all_tokens)
+    unique_tokens = len(np.unique(all_tokens))
+    avg_mse = total_mse / total_samples
+
+    print(f"\n====== 验证报告 ======")
+    print(f"📉 平均 MSE Loss: {avg_mse:.6f}")
+    print(f"🧩 码本总大小: {model.code_num}")
+    print(f"✅ 实际激活 Token 数: {unique_tokens} (如果这个数很小，比如 <10，说明发生 Codebook Collapse)")
+    print(f"📊 当前 Perplexity: {metrics['perplexity'].item():.4f}")
+
+
+def visualize_reconstruction(real_data, recon_data, sample_idx=0, channel_idx=0):
+    """
+    修改版：保存图片而不是显示，避免 PyCharm Backend 报错
+    """
+    real = real_data[sample_idx, :, channel_idx].cpu().numpy()
+    recon = recon_data[sample_idx, :, channel_idx].cpu().numpy()
+
+    plt.figure(figsize=(10, 4))
+    plt.plot(real, label='Original (GT)', color='black', alpha=0.7)
+    plt.plot(recon, label='Reconstruction', color='red', linestyle='--', alpha=0.8)
+    plt.title(f"Reconstruction Check (Sample {sample_idx}, Channel {channel_idx})")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    # --- 修改这里 ---
+    # 原代码: plt.show()
+    # 新代码: 保存到当前目录下的 vq_check.png
+    save_path = "vq_check.png"
+    plt.savefig(save_path)
+    plt.close()  # 关闭图表释放内存
+    print(f"🖼️ 验证图片已保存至: {os.path.abspath(save_path)}")
+
+# ==========================================
+# 如何调用 (示例)
+# ==========================================
+def vos():
+    # 1. 模拟参数 (因为你的模型需要 args)
+    class Args:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dataset_key = "mhealth"  # 或者 ucihar
+        d_model = 512
+        down_sampling_layers = 3
+        loss_style = "recon"  # 确保能跑通
+        # 添加其他必要的参数...
+
+
+    args = Args()
+
+    # 2. 初始化模型
+    # 注意：确保 input_dim 和你的数据一致，例如 6 或 9
+    model = IMU_VQ_Model(args)
+
+    # 3. 加载权重 (这一步很重要！)
+    # model.load_wrapper("你的权重路径.pth")
+
+    # 4. 制造假数据或使用你的 DataLoader
+    # 假设数据格式是 [Batch=32, Len=96, Channel=6]
+    dummy_data = torch.randn(32, 200, model.input_dim)
+    dummy_loader = [(dummy_data, None)]  # 模拟 DataLoader
+
+    print("开始验证 VQ-VAE...")
+    validate_vqvae(model, dummy_loader, device=args.device)
 if __name__ == '__main__':
+    vos()
+
+
+
     batch_imu = torch.randn(32,96,7)
     model = IMU_VQ_Model(input_dim=7)
     criterion_mse = nn.MSELoss()

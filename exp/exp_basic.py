@@ -9,10 +9,15 @@ import torch
 from models import Autoformer, Transformer, TimesNet, Nonstationary_Transformer, DLinear, FEDformer, \
     Informer, LightTS, Reformer, ETSformer, Pyraformer, PatchTST, MICN, Crossformer, FiLM, iTransformer, \
     Koopa, TiDE, FreTS, TimeMixer, TSMixer, SegRNN, MambaSimple, TemporalFusionTransformer, SCINet, PAttn, TimeXer, \
-    WPMixer, MultiPatchFormer, KANAD, MSGNet, TimeFilter, Sundial, TimeMoE, SensorLLMFuy
+    WPMixer, MultiPatchFormer, KANAD, MSGNet, TimeFilter, Sundial, TimeMoE, SensorLLMFuy, GPT4TS, Attend, DeepConvLSTM, \
+    DeepConvLSTMAttention
 from models_new_version_run import SensorLLMFuy_202512301643_backmodel_randommask, SensorLLMFuy_batch_20251231_163911, \
     SensorLLMFuy_batch_20251231_164145, SensorLLMFuy_test, SensorLLMFuy_test_withllm_mae, VQ_VAE, \
-    SensorLLMFuy_test_withllm_mae_vqvae, Alignment_Stage, SensorLLMFuy_test_withllm_mae_vqvae_with_alignment
+    SensorLLMFuy_test_withllm_mae_vqvae, Alignment_Stage, SensorLLMFuy_test_withllm_mae_vqvae_with_alignment, \
+    SensorLLMFuy_test_withllm_mae_vqvae_alb_prompt, SensorLLMFuy_test_withllm_mae_vqvae_alb_linear, \
+    SensorLLMFuy_test_withllm_mae_vqvae_alb_transformer, SensorLoRA, SensorLLMFuy_test_withllm_mae_vqvae_nollm_20260127, \
+    SensorLLMFuy_test_withllm_mae_vqvae_confidence, SensorLLMFuy_test_withllm_test_teacher_version1, \
+    SensorLLMFuy_test_withllm_test_teacher_version2, SensorLLMFuy_test_withllm_test_teacher_version3
 
 
 class Exp_Basic(object):
@@ -66,6 +71,21 @@ class Exp_Basic(object):
             'SensorLLMFuy_test_withllm_mae_vqvae':SensorLLMFuy_test_withllm_mae_vqvae,
             'Alignment_Stage':Alignment_Stage,
             'SensorLLMFuy_test_withllm_mae_vqvae_with_alignment':SensorLLMFuy_test_withllm_mae_vqvae_with_alignment,
+            'GPT4TS':GPT4TS,
+            'Attend':Attend,
+            'DeepConvLSTM':DeepConvLSTM,
+            'DeepConvLSTMAttention':DeepConvLSTMAttention,
+            # 'SensorLLMFuy_test_withllm_mae_vqvae_alb':SensorLLMFuy_test_withllm_mae_vqvae_alb,
+            'SensorLLMFuy_test_withllm_mae_vqvae_alb_linear':SensorLLMFuy_test_withllm_mae_vqvae_alb_linear,
+            'SensorLLMFuy_test_withllm_mae_vqvae_alb_transformer':SensorLLMFuy_test_withllm_mae_vqvae_alb_transformer,
+            'SensorLLMFuy_test_withllm_mae_vqvae_alb_transformer':SensorLLMFuy_test_withllm_mae_vqvae_alb_transformer,
+            'SensorLoRA':SensorLoRA,
+            'SensorLLMFuy_test_withllm_mae_vqvae_nollm_20260127':SensorLLMFuy_test_withllm_mae_vqvae_nollm_20260127,
+            'SensorLLMFuy_test_withllm_mae_vqvae_confidence':SensorLLMFuy_test_withllm_mae_vqvae_confidence,
+            'SensorLLMFuy_test_withllm_test_teacher_version1':SensorLLMFuy_test_withllm_test_teacher_version1,
+            'SensorLLMFuy_test_withllm_test_teacher_version2':SensorLLMFuy_test_withllm_test_teacher_version2,
+            'SensorLLMFuy_test_withllm_mae_vqvae_alb_prompt':SensorLLMFuy_test_withllm_mae_vqvae_alb_prompt,
+            'SensorLLMFuy_test_withllm_test_teacher_version3':SensorLLMFuy_test_withllm_test_teacher_version3,
 
             # 'Chronos': Chronos,
             # 'Moirai': Moirai,

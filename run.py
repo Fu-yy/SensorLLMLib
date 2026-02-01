@@ -6,9 +6,11 @@ import torch.backends
 from exp.exp_alignment_class import Exp_Alignment_Classification
 from exp.exp_long_term_forecasting import Exp_Long_Term_Forecast
 from exp.exp_imputation import Exp_Imputation
+from exp.exp_lora import Exp_Lora
 from exp.exp_short_term_forecasting import Exp_Short_Term_Forecast
 from exp.exp_anomaly_detection import Exp_Anomaly_Detection
 from exp.exp_classification import Exp_Classification
+from exp.exp_threestage_classification import Exp_ThreeStage_Classification
 from exp.exp_vqvae_class import Exp_VQ_VAE_Classification
 from exp.exp_zero_shot_forecasting import Exp_Zero_Shot_Forecast
 from utils.print_args import print_args
@@ -95,7 +97,7 @@ if __name__ == '__main__':
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=10, help='datasets loader num workers')
-    parser.add_argument('--itr', type=int, default=3, help='experiments times')
+    parser.add_argument('--itr', type=int, default=5, help='experiments times')
     parser.add_argument('--train_epochs', type=int, default=10, help='train epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input datasets')
     parser.add_argument('--patience', type=int, default=3, help='early stopping patience')
@@ -203,13 +205,27 @@ if __name__ == '__main__':
     parser.add_argument('--loss_style', type=str, default="all", help='loss_style')
     parser.add_argument('--vqvae_path', type=str, default="vqvae_path", help='vqvae_path')
 
+    # alb
+    parser.add_argument('--use_teacher', type=int, default=1, help='use_teacher')
+    parser.add_argument('--teacher_init', type=str, default="pretrained", help='teacher_init')
+    parser.add_argument('--teacher_use_prompt', type=int, default=1, help='teacher_use_prompt')
+    parser.add_argument('--distill_type', type=str, default="soft_kl", help='distill_type')
+    parser.add_argument('--distill_temperature', type=float, default=1.0, help='distill_temperature')
+    parser.add_argument('--lambda_distill', type=float, default=1.0, help='lambda_distill')
+
+    parser.add_argument('--loss_recon_weight', type=float, default=1.0, help='lambda_distill')
+    parser.add_argument('--loss_distill_weight', type=float, default=1.0, help='lambda_distill')
+    parser.add_argument('--loss_recon_teacher_weight', type=float, default=1.0, help='lambda_distill')
+    parser.add_argument('--loss_mse_student_weight', type=float, default=1.0, help='lambda_distill')
+    parser.add_argument('--train_mode', type=str, default="teacher_lm", help='teacher_lm,student_ce,student_distill_B')
+
 
 
 
 
     args = parser.parse_args()
 
-    if args.model=="SensorLLMFuy_test_withllm_mae_vqvae_with_alignment" or args.model=="Alignment_Stage" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae" or args.model == "VQVAE" or args.model == "SensorLLMFuy" or args.model == "SensorLLMFuy_202512301643_backmodel_randommask" or args.model == "SensorLLMFuy_batch_20251231_163911" or args.model == "SensorLLMFuy_batch_20251231_164145" or args.model == "SensorLLMFuy_test" or args.model == "SensorLLMFuy_batch_20251231_164145_new" or args.model == "SensorLLMFuy_test_nollm_mae" or args.model == "SensorLLMFuy_test_nollm_contri" or args.model == "SensorLLMFuy_test_withllm_mae":
+    if args.model == "SensorLLMFuy_test_withllm_test_teacher_version3" or args.model == "SensorLLMFuy_test_withllm_mae_vqvae_alb_prompt" or args.model=="SensorLLMFuy_test_withllm_test_teacher_version2" or args.model == "SensorLLMFuy_test_withllm_test_teacher_version1" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae_confidence" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae_nollm_20260127" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae_alb_linear" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae_alb_transformer" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae_alb" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae_with_alignment" or args.model=="Alignment_Stage" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae" or args.model == "VQVAE" or args.model == "SensorLLMFuy" or args.model == "SensorLLMFuy_202512301643_backmodel_randommask" or args.model == "SensorLLMFuy_batch_20251231_163911" or args.model == "SensorLLMFuy_batch_20251231_164145" or args.model == "SensorLLMFuy_test" or args.model == "SensorLLMFuy_batch_20251231_164145_new" or args.model == "SensorLLMFuy_test_nollm_mae" or args.model == "SensorLLMFuy_test_nollm_contri" or args.model == "SensorLLMFuy_test_withllm_mae":
         args.two_stage = 1
     else:
         args.two_stage = 0
@@ -243,10 +259,14 @@ if __name__ == '__main__':
         Exp = Exp_Anomaly_Detection
     elif args.task_name == 'alignment':
         Exp = Exp_Alignment_Classification
+    elif args.task_name == 'lora':
+        Exp = Exp_Lora
     elif args.task_name == 'vqvae':
         Exp = Exp_VQ_VAE_Classification
     elif args.task_name == 'classification':
         Exp = Exp_Classification
+    elif args.task_name == 'threestage_classification':
+        Exp = Exp_ThreeStage_Classification
     elif args.task_name == 'zero_shot_forecast':
         Exp = Exp_Zero_Shot_Forecast
     else:

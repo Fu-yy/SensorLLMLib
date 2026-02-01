@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,7 +8,12 @@ import math
 from layers.Embed import PositionalEmbedding
 from layers.StandardNorm import Normalize
 from layers.TimeFilter_layers import TimeFilter_Backbone
+from typing import List, Tuple, Dict, Any, Optional
 
+try:
+    import yaml
+except Exception:
+    yaml = None
 
 class PatchEmbed(nn.Module):
     def __init__(self, dim, patch_len, stride=None, pos=True):
@@ -36,7 +43,33 @@ class Model(nn.Module):
         self.task_name = configs.task_name
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len
-        self.n_vars = configs.c_out
+
+        # -------- dataset cfg load --------
+        self.dataset_key = str(getattr(configs, "dataset_key", getattr(configs, "data", "mhealth"))).lower()
+        self.ds_cfg: Dict[str, Any] = {}
+        if hasattr(configs, "ds_cfg") and isinstance(configs.ds_cfg, dict):
+            self.ds_cfg = configs.ds_cfg
+        else:
+            ts_yaml = getattr(configs, "ts_backbone_yaml", None)
+            if ts_yaml is not None:
+                if yaml is None:
+                    raise ImportError("pyyaml not installed but ts_backbone_yaml is set.")
+                if not os.path.exists(ts_yaml):
+                    raise FileNotFoundError(ts_yaml)
+                with open(ts_yaml, "r", encoding="utf-8") as f:
+                    cfg_all = yaml.safe_load(f)
+                if self.dataset_key not in cfg_all:
+                    raise KeyError(f"{self.dataset_key} not in {ts_yaml}")
+                self.ds_cfg = cfg_all[self.dataset_key]
+        self.device = configs.device
+        self.C = int(self.ds_cfg.get("channel_num", getattr(configs, "enc_in", 15)))
+        self.num_class = int(self.ds_cfg.get("num_labels", getattr(configs, "num_class", 12)))
+
+
+
+
+
+        self.n_vars = self.C
         self.dim = configs.d_model
         self.d_ff = configs.d_ff
         self.patch_len = configs.patch_len
@@ -66,7 +99,7 @@ class Model(nn.Module):
             self.num_patches = int((self.seq_len * configs.enc_in - self.patch_len) / self.stride + 1)  # L
             self.dropout = nn.Dropout(configs.dropout)
             self.projection = nn.Linear(
-                self.dim * self.num_patches, configs.num_class)
+                self.dim * self.num_patches, self.num_class)
 
         # Without RevIN
         self.use_RevIN = False
@@ -74,7 +107,7 @@ class Model(nn.Module):
 
     def _get_mask(self, device):
         dtype = torch.float32
-        L = self.args.seq_len * self.args.c_out // self.args.patch_len
+        L = self.args.seq_len * self.C // self.args.patch_len
         N = self.args.seq_len // self.args.patch_len
         masks = []
         for k in range(L):

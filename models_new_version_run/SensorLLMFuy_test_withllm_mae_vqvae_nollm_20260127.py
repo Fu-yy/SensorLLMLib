@@ -167,7 +167,10 @@ class TeacherOut:
     probs: torch.Tensor  # [B, K] Teacher对mask位置的预测分布
     valid: torch.Tensor  # [B] 标记该样本是否成功生成了guidance
 
-
+class TeacherOut:
+    def __init__(self, probs_full, chosen_pos):
+        self.probs = probs_full  # [B,P,K]
+        self.chosen_pos = chosen_pos  # [B]
 def ids_to_special_tokens(token_ids: torch.Tensor, K: int) -> List[List[str]]:
     """
     将 Token ID 矩阵转换为字符串列表
@@ -392,91 +395,313 @@ def _pad_to_multiple(x: torch.Tensor, multiple: int, pad_value: float = 0.0):
 # ==============================================================================
 # Part 2: Teacher 1 - Soft Llama (LLM)
 # ==============================================================================
+# 头部需要增加这个 import
+from peft import PeftModel
+
+
+# ==============================================================================
+# Part 2: Teacher 1 - LoRA Llama Teacher (New & Correct)
+# ==============================================================================
 class SoftLlamaTeacher(nn.Module):
-    def __init__(self, llm_path,adapter_path, codebook_weights, mask_token_id,device, temperature=2.0):
+    def __init__(self, llm_path, adapter_path, codebook_weights, mask_token_id, device):
         super().__init__()
         self.device = device
-        self.temperature = temperature  # 新增：温度参数
+        self.mask_token_id = mask_token_id
 
-        print(f"[Teacher] Loading Llama from {llm_path}...")
-        # 加载 LLM 主体 (冻结)
+        # 1. 加载 Tokenizer (和训练时保持完全一致)
+        print(f"[Teacher] Loading Tokenizer from {llm_path}...")
+        self.tokenizer = AutoTokenizer.from_pretrained(llm_path, use_fast=False)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # 2. 注册 Special Tokens (必须和 LoRA 训练时一致)
+        # 假设 codebook_weights.shape[0] 是 512
+        K = codebook_weights.shape[0]
+        prim_tokens = [f"<P{i:03d}>" for i in range(K)] + ["<PMASK>"]
+        self.tokenizer.add_special_tokens({"additional_special_tokens": prim_tokens})
+
+        # 3. 加载 Base Model
+        print(f"[Teacher] Loading Base Llama from {llm_path}...")
         self.llm = AutoModelForCausalLM.from_pretrained(
-            llm_path, torch_dtype=torch.float16, trust_remote_code=True
-        ).to(device).eval()
-        for p in self.llm.parameters(): p.requires_grad = False
+            llm_path,
+            torch_dtype=torch.float16,
+            # device_map="auto" # 建议注释掉，手动控制 to(device) 更稳
+        )
+        self.llm.resize_token_embeddings(len(self.tokenizer))
 
-        self.tokenizer = AutoTokenizer.from_pretrained(llm_path)
-        self.llm_dim = self.llm.config.hidden_size
+        # 4. 加载你训练好的 LoRA Adapter
+        if adapter_path and os.path.exists(adapter_path):
+            print(f"[Teacher] Loading LoRA Adapter from {adapter_path}...")
+            self.llm = PeftModel.from_pretrained(
+                self.llm,
+                adapter_path,
+                torch_dtype=torch.float16
+            )
+            # 融合 LoRA 权重能加快推理速度 (可选)
+            # self.llm = self.llm.merge_and_unload()
+        else:
+            print(f"[Teacher] WARNING: Adapter path {adapter_path} not found! Teacher is dumb.")
 
-        # 注册 Codebook (冻结)
-        self.register_buffer("codebook", codebook_weights.to(device))
-        self.num_vq_codes = self.codebook.shape[0]
-        self.vq_dim = self.codebook.shape[1]
+        # 5. 冻结所有参数 & 移至 GPU
+        self.llm.eval().to(self.device)
+        for p in self.llm.parameters():
+            p.requires_grad = False
 
-        # === 核心可训练组件 ===
-        # Projector: VQ维 -> LLM维
-        self.projector = nn.Linear(self.vq_dim, self.llm_dim).to(device)
-        # Output Head: LLM维 -> VQ分类维
-        self.output_head = nn.Linear(self.llm_dim, self.num_vq_codes).to(device)
+        # 缓存 Token ID 映射，加速 forward
+        # 我们需要知道 <P000> 对应的 tokenizer id 是多少
+        self.prim_ids = [self.tokenizer.convert_tokens_to_ids(t) for t in prim_tokens[:-1]]  # 不含 PMASK
+        self.prim_ids_tensor = torch.tensor(self.prim_ids, device=self.device)
 
-        # === 1. Prompt 构建逻辑 (预计算) ===
-        # 我们构建一个固定的 System Prompt，将其编码并冻结，避免每次 Forward 重复计算
-        self.system_prompt = "Analyze the following sensor sequence and predict the underlying pattern:"
-        self.prompt_input_ids = self.tokenizer(self.system_prompt, return_tensors="pt").input_ids.to(device)
+    def forward(self, masked_ids):
+        """
+        masked_ids: [B, P] 包含了 VQ index，其中被 mask 的位置是 mask_token_id
+        """
+        B, P = masked_ids.shape
 
+        # 1. 构造 Prompt (必须与 LoRA 训练时一致)
+        # 这是一个稍微耗时的操作，但在 batch size 不大时可以接受
+        batch_prompts = []
+
+        # 把 tensor 转回 cpu list 处理字符串
+        ids_list = masked_ids.cpu().tolist()
+
+        for b in range(B):
+            seq_str = []
+            for t in range(P):
+                val = ids_list[b][t]
+                if val == self.mask_token_id:
+                    seq_str.append("<PMASK>")
+                else:
+                    seq_str.append(f"<P{val:03d}>")
+
+            # Prompt 模板
+            prompt = (
+                "Analyze the sensor sequence and fill in the mask.\n"
+                f"Sequence: {' '.join(seq_str)}\n"
+                "Answer:"  # 注意这里没有空格，紧接着预测下一个 token
+            )
+            batch_prompts.append(prompt)
+
+        # 2. Tokenizer
+        enc = self.tokenizer(
+            batch_prompts,
+            padding=True,
+            truncation=True,
+            max_length=512,
+            return_tensors="pt"
+        ).to(self.device)
+
+        # 3. LLM Inference
         with torch.no_grad():
-            # 拿到 Prompt 的 Embedding: [1, L_text, D_llm]
-            self.prompt_embeds = self.llm.get_input_embeddings()(self.prompt_input_ids)
+            outputs = self.llm(
+                input_ids=enc.input_ids,
+                attention_mask=enc.attention_mask
+            )
+            # 取最后一个 token 的 logits (对应 "Answer:" 后面那个词)
+            # [B, Vocab_Size]
+            next_token_logits = outputs.logits[:, -1, :]
 
-        self.L_text = self.prompt_embeds.shape[1]  # 记录文本长度，用于后续切片
+        # 4. 只取 Sensor Tokens 的 logits
+        # 我们只关心 <P000>~<P511> 的概率，忽略英文单词
+        sensor_logits = next_token_logits[:, self.prim_ids_tensor]  # [B, K]
 
-    def forward(self, gt_ids):
+        # 5. Softmax 得到概率分布
+        probs = F.softmax(sensor_logits, dim=-1)  # [B, K]
+
+        class TeacherOut:
+            def __init__(self, probs):
+                self.probs = probs
+
+        return TeacherOut(probs)
+
+
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
+
+
+class TeacherOut:
+    def __init__(self, probs_full, chosen_pos):
+        self.probs = probs_full          # [B,P,K]
+        self.chosen_pos = chosen_pos     # [B]
+
+
+class SoftLlamaTeacherLoRA(nn.Module):
+    """
+    LoRA Llama teacher:
+      input: masked_ids [B,P] (mask positions use mask_token_id=K)
+      output: probs_full [B,P,K] (only one position per sample is informative)
+    """
+    def __init__(self, llm_path: str, adapter_path: str, K: int, mask_token_id: int,
+                 device: torch.device, max_len: int = 512, temperature: float = 0.5):
+        super().__init__()
+        self.device = device
+        self.K = int(K)
+        self.mask_token_id = int(mask_token_id)
+        self.max_len = int(max_len)
+        self.temperature = float(temperature)
+
+        # ---- tokenizer: MUST match training ----
+        # if you saved tokenizer in adapter dir, load it from adapter_path
+        tok_src = adapter_path if (adapter_path and os.path.exists(adapter_path)) else llm_path
+        print(f"[Teacher] Loading tokenizer from: {tok_src}")
+        self.tokenizer = AutoTokenizer.from_pretrained(tok_src, use_fast=False)
+
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+
+        prim_tokens = [f"<P{i:03d}>" for i in range(self.K)] + ["<PMASK>"]
+        # if tokenizer already has them, add_special_tokens will add 0
+        self.tokenizer.add_special_tokens({"additional_special_tokens": prim_tokens})
+
+        # cache primitive token ids (<P000>..<P{K-1}>)
+        prim_ids = [self.tokenizer.convert_tokens_to_ids(f"<P{i:03d}>") for i in range(self.K)]
+        if any(x < 0 for x in prim_ids):
+            bad = [i for i, x in enumerate(prim_ids) if x < 0][:10]
+            raise ValueError(f"[Teacher] primitive token id mapping failed. Example bad ids: {bad}")
+        self.register_buffer("prim_ids_tensor", torch.tensor(prim_ids, dtype=torch.long), persistent=False)
+
+        # ---- base model ----
+        print(f"[Teacher] Loading base model from: {llm_path}")
+        base = AutoModelForCausalLM.from_pretrained(
+            llm_path,
+            torch_dtype=torch.float16,
+            trust_remote_code=True
+        )
+        base.resize_token_embeddings(len(self.tokenizer))
+
+        # ---- load LoRA adapter ----
+        if adapter_path and os.path.exists(adapter_path):
+            print(f"[Teacher] Loading LoRA adapter from: {adapter_path}")
+            self.llm = PeftModel.from_pretrained(base, adapter_path, torch_dtype=torch.float16)
+            # optional: merge for faster inference
+            # self.llm = self.llm.merge_and_unload()
+        else:
+            raise FileNotFoundError(f"[Teacher] adapter_path not found: {adapter_path}")
+
+        self.llm.eval().to(self.device)
+        for p in self.llm.parameters():
+            p.requires_grad = False
+
+        tid = self.tokenizer.convert_tokens_to_ids("<P000>")
+        assert tid != self.tokenizer.unk_token_id, "P000 is not registered as a single special token!"
+
+        # 1) 看 tokenizer 里到底注册了多少个 <Pxxx>
+        p_tokens = [t for t in self.tokenizer.get_vocab().keys() if t.startswith("<P") and t.endswith(">")]
+        p_tokens = sorted(p_tokens)
+
+        # print("Number of <Pxxx> tokens:", len(p_tokens))
+        # print("Last 5 tokens:", p_tokens[-5:])
+        # print("Does <P512> exist?", "<P512>" in p_tokens)
+        # print("Does <PMASK> exist?", "<PMASK>" in p_tokens)
+
+
+
+
+
+
+
+
+
+
+
+
+    def _build_prompt_one_mask(self, ids_row: torch.Tensor, pick_row: Optional[torch.Tensor] = None) -> tuple[str, int]:
         """
-        Args:
-            gt_ids: [B, L_sensor] VQ-VAE 的 Ground Truth Token IDs
-        Returns:
-            soft_probs: [B, L_sensor, num_vq_codes] 经过温度缩放的概率分布
-            logits: [B, L_sensor, num_vq_codes] 原始 Logits (可选，用于计算 Teacher 自身的 CE Loss)
+        ids_row: [P], contains mask_token_id at masked positions
+        pick_row: [P] bool mask; if provided, only pick where pick_row==True AND ids_row==mask_token_id
         """
-        B, L_sensor = gt_ids.shape
+        # ---- always do selection on CPU to avoid cuda/cpu mismatch ----
+        ids_row_cpu = ids_row.detach().to("cpu")
+        pick_row_cpu = pick_row.detach().to("cpu") if pick_row is not None else None
 
-        # 1. 查表获取 VQ Embeddings
-        # [B, L_sensor] -> [B, L_sensor, VQ_Dim]
-        vq_embeds = F.embedding(gt_ids, self.codebook)
+        mask_pos = (ids_row_cpu == self.mask_token_id)
 
-        # 2. 投影到 LLM 空间
-        # [B, L_sensor, VQ_Dim] -> [B, L_sensor, LLM_Dim]
-        sensor_embeds = self.projector(vq_embeds)
+        if pick_row_cpu is not None:
+            cand = (mask_pos & pick_row_cpu.bool()).nonzero(as_tuple=False).view(-1)
+        else:
+            cand = mask_pos.nonzero(as_tuple=False).view(-1)
 
-        # === 3. Prompt 拼接 ===
-        # 构造输入: [Prompt (L_text) + Sensor Data (L_sensor)]
-        # batch_prompt: [B, L_text, LLM_Dim]
-        batch_prompt = self.prompt_embeds.expand(B, -1, -1)
+        if cand.numel() == 0:
+            return "", -1
 
-        # inputs_embeds: [B, L_text + L_sensor, LLM_Dim]
-        inputs_embeds = torch.cat([batch_prompt, sensor_embeds], dim=1).to(self.llm.dtype)
+        # randint on CPU is fine
+        mpos = int(cand[torch.randint(0, cand.numel(), (1,)).item()].item())
 
-        # 4. LLM Forward
-        # 只需要 hidden_states，不需要计算原本的 causal loss
-        outputs = self.llm(inputs_embeds=inputs_embeds, output_hidden_states=True)
-        # 取最后一层: [B, L_text + L_sensor, LLM_Dim]
-        last_hidden = outputs.hidden_states[-1]
+        row_list = ids_row_cpu.tolist()
+        seq = []
+        for t, v in enumerate(row_list):
+            if (t == mpos) or (int(v) == self.mask_token_id):
+                seq.append("<PMASK>")
+            else:
+                seq.append(f"<P{int(v):03d}>")
 
-        # === 5. 输出切片处理 ===
-        # 我们只关心 Sensor 部分的输出，扔掉 Prompt 部分
-        # [B, L_text + L_sensor, D] -> [B, L_sensor, D]
-        sensor_features = last_hidden[:, self.L_text:, :]
+        prompt = (
+            "Analyze the sensor sequence and fill in the mask.\n"
+            f"Sequence: {' '.join(seq)}\n"
+            "Answer: "
+        )
+        return prompt, mpos
 
-        # 6. 映射回 VQ 空间
-        # [B, L_sensor, Num_Codes]
-        logits = self.output_head(sensor_features.to(torch.float32))
+    @torch.no_grad()
+    def forward(self, masked_ids: torch.Tensor, pick_from_mask: Optional[torch.Tensor] = None) -> TeacherOut:
+        """
+        masked_ids: [B,P]  (被mask的位置 = self.mask_token_id)
+        pick_from_mask: [B,P] bool，可选：要求只从 (pick_from_mask==True) 的mask位置里挑一个来问LLM
+        return:
+          probs_full: [B,P,K] (默认 uniform，只有 chosen_pos 那个位置是 teacher 分布)
+          chosen_pos: [B] (每个样本实际挑的mask位置；若无可选mask则为 -1)
+        """
+        B, P = masked_ids.shape
+        prompts = []
+        chosen_pos = torch.full((B,), -1, device=self.device, dtype=torch.long)
 
-        # === 7. 温度处理 ===
-        # T > 1 会使分布更平滑 (Softer)，包含更多暗知识
-        # T < 1 会使分布更尖锐 (Sharper)
-        probs = F.softmax(logits / self.temperature, dim=-1)
+        # --- 逐样本构建prompt，保证 prompts 长度一定是 B ---
+        ids_cpu = masked_ids.detach().to("cpu")
+        pick_cpu = pick_from_mask.detach().to("cpu") if pick_from_mask is not None else None
 
-        return probs, logits
+        for b in range(B):
+            ids_row = masked_ids[b]  # GPU tensor
+            pick_row = pick_cpu[b] if pick_cpu is not None else None
+
+            ptxt, mpos = self._build_prompt_one_mask(ids_row, pick_row=pick_row)
+            # 若该样本没有任何可选mask位置，给一个“dummy prompt”，并保持 chosen_pos=-1
+            if mpos < 0:
+                ptxt = "Analyze the sensor sequence and fill in the mask.\nSequence: <PMASK>\nAnswer: "
+            prompts.append(ptxt)
+            # print(prompts[0])
+            chosen_pos[b] = mpos
+
+        # --- tokenize (prompts 一定非空，且长度=B) ---
+        enc = self.tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.max_len
+        ).to(self.device)
+
+        out = self.llm(input_ids=enc.input_ids, attention_mask=enc.attention_mask)
+
+        # 用 last non-pad 位置拿 logits（更稳）
+        last_pos = enc.attention_mask.sum(dim=1) - 1  # [B]
+        last_logits = out.logits[torch.arange(B, device=self.device), last_pos, :]  # [B,V]
+
+        prim_logits = last_logits.index_select(dim=-1, index=self.prim_ids_tensor)  # [B,K]
+        prim_logits = prim_logits / max(1e-6, self.temperature)
+        probs = torch.softmax(prim_logits, dim=-1)  # [B,K]
+
+        # 组装成 [B,P,K]
+        probs_full = torch.full((B, P, self.K), 1.0 / self.K, device=self.device, dtype=probs.dtype)
+        for b in range(B):
+            mpos = int(chosen_pos[b].item())
+            if mpos >= 0:
+                probs_full[b, mpos, :] = probs[b]
+
+        return TeacherOut(probs_full, chosen_pos)
 
 # ==============================================================================
 # Part 3: Student Components (Conv Patch Embedding + Transformer)
@@ -650,7 +875,8 @@ class Model(nn.Module):
         self.lambda_distill = float(getattr(args, "lambda_distill", 1))
         self.teacher = None
 
-        if self.stage == 1 and hasattr(args, 'llama_name'):
+        # if self.stage == 1 and hasattr(args, 'llama_name11'):
+        if self.stage == 1 and hasattr(args, 'llama_name111111'):
             # Load Codebook safely
             if hasattr(self, 'qua_path') and self.qua_path:
                 cb_path = self.qua_path + os.sep + "best_codebook.pth"
@@ -662,12 +888,14 @@ class Model(nn.Module):
                 codebook_weights = self.vq_net.quantizer.codebook.data.cpu()
             alignment_path = self.ds_cfg.get("alignment_path", None)
             adapter_path = alignment_path+ os.sep + "best_wrapper.pth"
-            adapter_path = None
-            self.teacher = SoftLlamaTeacher(
+            adapter_path = r"D:\fuy\MyCode\SensorLLMLib_v2\runs\SensorLoRA\mhealth\alignment_weight\stage2\ckpts\lora_MHealth_SensorLoRA_MHealth_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0"
+            adapter_path = r"D:\fuy\MyCode\SensorLLMLib_v2\runs\lora_UCIHAR_SensorLoRA_UCIHAR_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0"
+            # adapter_path = r"D:\fuy\MyCode\SensorLLMLib_v2\runs\SensorLoRA_next_token\mhealth\alignment_weight\stage2\ckpts\lora_MHealth_SensorLoRA_MHealth_ftM_sl100_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0"
+            self.teacher = SoftLlamaTeacherLoRA(
                 llm_path=args.llama_name,
-                adapter_path=adapter_path,
-                codebook_weights=codebook_weights,
+                adapter_path=alignment_path,
                 mask_token_id=self.mask_token_id,
+                K=self.mask_token_id,
                 device=self.device
             )
 
@@ -752,32 +980,80 @@ class Model(nn.Module):
             else:
                 loss_recon = torch.tensor(0.0, device=self.device, requires_grad=True)
 
-            # Distill Loss
             loss_distill = torch.tensor(0.0, device=self.device)
+
+            # 用于监控的统计指标初始化
+            teacher_acc_batch = 0.0
+            teacher_keep_ratio = 0.0
+
             if self.teacher is not None and self.lambda_distill > 0:
-                # teacher_input_ids = gt_ids.clone()
-                # teacher_input_ids[mask_bool] = self.mask_token_id
+                # 1. 构造 Teacher 输入 (把 mask 位置换成 mask_token_id)
+                teacher_input_ids = gt_ids.clone()
+                teacher_input_ids[mask_bool] = self.mask_token_id
 
-                # 1. 获取 Teacher 输出
-                t_probs, t_logits = self.teacher(gt_ids)
+                # 2. Teacher 推理
+                # 注意：这里 teacher_out.probs 已经是 [B, P, K] 的稀疏矩阵了
+                teacher_out = self.teacher(teacher_input_ids, pick_from_mask=final_mask)
 
-                # 2. 计算 Teacher 自身的重构 Loss (确保 Teacher 并没有在乱讲)
-                # Teacher 也要努力预测正确的 gt_ids
-                loss_teacher_recon = F.cross_entropy(t_logits.view(-1, self.num_primitives), gt_ids.view(-1))
+                # 3. 构造 distill_mask (只针对 Teacher 挑选出的那个位置)
+                # chosen_pos 是 [B], 存的是每个样本被选中的那个 mask 的 index
+                chosen_mask = torch.zeros_like(final_mask, dtype=torch.bool)
+                for b in range(chosen_mask.size(0)):
+                    p = int(teacher_out.chosen_pos[b].item())
+                    if p >= 0:
+                        chosen_mask[b, p] = True
 
-                s_log_probs = F.log_softmax(student_logits[final_mask], dim=-1)
-                t_probs = t_probs[final_mask].detach()
+                # 最终用于计算蒸馏 loss 的 mask (必须是 Teacher 选中的 AND Student Mask 的 AND 非 Padding 的)
+                distill_mask = final_mask & chosen_mask
 
-                if s_log_probs.numel() > 0:
-                    loss_distill = F.kl_div(s_log_probs, t_probs.detach(), reduction='batchmean')
-            loss_total = loss_recon + self.lambda_distill * loss_distill + loss_teacher_recon
+                if distill_mask.any():
+                    # 4. 获取 Teacher 和 Student 的 Logits/Probs
+                    s_logp = F.log_softmax(student_logits[distill_mask], dim=-1)  # [M, K]
+                    t_probs = teacher_out.probs[distill_mask].detach()  # [M, K]
+                    gt_sel = gt_ids[distill_mask]  # [M] (Ground Truth)
 
-            return loss_total, student_logits, {
-                "loss_recon": loss_recon.item(),
-                "loss_distill": loss_distill.item(),
-                "loss_total": loss_total.item()
+                    # =====================================================
+                    # 【核心修正】：双重门控 (Double Gating)
+                    # =====================================================
+
+                    # (A) 自信度门控: Teacher 必须足够自信
+                    conf_th = float(getattr(self.args, "teacher_conf_th", 0.02))
+                    is_confident = t_probs.max(dim=-1).values > conf_th
+
+                    # (B) 正确性门控: Teacher 的 Top-1 必须是对的！(或者 Top-3 包含 GT)
+                    # 对于 1B 这种小模型，建议严格一点，只信任它预测正确的时候
+                    teacher_pred = t_probs.argmax(dim=-1)
+                    is_correct = (teacher_pred == gt_sel)
+
+                    # 只有既自信又正确的样本，才用来蒸馏
+                    keep = is_confident & is_correct
+
+                    # --- 统计指标 ---
+                    teacher_acc_batch = float(is_correct.float().mean().item())  # 监控 Teacher 有多准
+                    teacher_keep_ratio = float(keep.float().mean().item())  # 监控有多少样本参与了蒸馏
+
+                    if keep.any():
+                        # (C) 计算 KL Loss
+                        # 只有 keep 为 True 的行才计算
+                        # scale_factor: 平衡 loss 数量级。因为 recon 是 P 个点，distill 只有不到 1 个点
+                        # 简单起见，可以先不加 scale，或者手动把 lambda_distill 调大 (比如 5.0)
+                        loss_distill = F.kl_div(
+                            s_logp[keep],
+                            t_probs[keep],
+                            reduction="batchmean"
+                        )
+
+            loss_total = loss_recon + self.lambda_distill * loss_distill
+
+            metrics = {
+                "loss_recon": float(loss_recon.item()),
+                "loss_distill": float(loss_distill.item()),
+                "loss_total": float(loss_total.item()),
+                "teacher_acc": teacher_acc_batch,  # <--- 重点看这个！
+                "teacher_keep_ratio": teacher_keep_ratio
             }
-
+            # print(metrics)
+            return loss_total, student_logits, metrics
         # ====================
         # Stage 2: Classify
         # ====================

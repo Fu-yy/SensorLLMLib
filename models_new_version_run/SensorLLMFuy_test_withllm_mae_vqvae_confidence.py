@@ -393,90 +393,155 @@ def _pad_to_multiple(x: torch.Tensor, multiple: int, pad_value: float = 0.0):
 # Part 2: Teacher 1 - Soft Llama (LLM)
 # ==============================================================================
 class SoftLlamaTeacher(nn.Module):
-    def __init__(self, llm_path,adapter_path, codebook_weights, mask_token_id,device, temperature=2.0):
+    def __init__(self, llm_path, adapter_path,codebook_weights, mask_token_id, device):
         super().__init__()
         self.device = device
-        self.temperature = temperature  # 新增：温度参数
+        self.mask_token_id = mask_token_id
 
         print(f"[Teacher] Loading Llama from {llm_path}...")
-        # 加载 LLM 主体 (冻结)
         self.llm = AutoModelForCausalLM.from_pretrained(
             llm_path, torch_dtype=torch.float16, trust_remote_code=True
         ).to(device).eval()
+        self.tokenizer = AutoTokenizer.from_pretrained(llm_path)
         for p in self.llm.parameters(): p.requires_grad = False
 
-        self.tokenizer = AutoTokenizer.from_pretrained(llm_path)
         self.llm_dim = self.llm.config.hidden_size
-
-        # 注册 Codebook (冻结)
         self.register_buffer("codebook", codebook_weights.to(device))
         self.num_vq_codes = self.codebook.shape[0]
         self.vq_dim = self.codebook.shape[1]
 
-        # === 核心可训练组件 ===
-        # Projector: VQ维 -> LLM维
         self.projector = nn.Linear(self.vq_dim, self.llm_dim).to(device)
-        # Output Head: LLM维 -> VQ分类维
+        self.mask_embed_llama = nn.Parameter(torch.randn(1, 1, self.llm_dim).to(device))
         self.output_head = nn.Linear(self.llm_dim, self.num_vq_codes).to(device)
 
-        # === 1. Prompt 构建逻辑 (预计算) ===
-        # 我们构建一个固定的 System Prompt，将其编码并冻结，避免每次 Forward 重复计算
-        self.system_prompt = "Analyze the following sensor sequence and predict the underlying pattern:"
+        self.system_prompt = "Analyze sensor sequence:"
         self.prompt_input_ids = self.tokenizer(self.system_prompt, return_tensors="pt").input_ids.to(device)
-
         with torch.no_grad():
-            # 拿到 Prompt 的 Embedding: [1, L_text, D_llm]
             self.prompt_embeds = self.llm.get_input_embeddings()(self.prompt_input_ids)
+        # === 新增：加载对齐后的权重 ===
+        if adapter_path is not None and os.path.exists(adapter_path):
+            print(f"[Teacher] Loading Aligned Adapters from {adapter_path}")
+            checkpoint = torch.load(adapter_path, map_location=device)
 
-        self.L_text = self.prompt_embeds.shape[1]  # 记录文本长度，用于后续切片
+            # 加载 projector
+            self.projector.load_state_dict(checkpoint['projector'])
 
-    def forward(self, gt_ids):
-        """
-        Args:
-            gt_ids: [B, L_sensor] VQ-VAE 的 Ground Truth Token IDs
-        Returns:
-            soft_probs: [B, L_sensor, num_vq_codes] 经过温度缩放的概率分布
-            logits: [B, L_sensor, num_vq_codes] 原始 Logits (可选，用于计算 Teacher 自身的 CE Loss)
-        """
-        B, L_sensor = gt_ids.shape
+            # 加载 output_head
+            self.output_head.load_state_dict(checkpoint['output_head'])
 
-        # 1. 查表获取 VQ Embeddings
-        # [B, L_sensor] -> [B, L_sensor, VQ_Dim]
-        vq_embeds = F.embedding(gt_ids, self.codebook)
+            # 极其重要：加载后冻结它们！
+            # 在蒸馏阶段，Teacher 应该是全冻结的（包括 Adapter）
+            # 除非你想在蒸馏时继续微调 Teacher (通常不建议)
+            for p in self.projector.parameters(): p.requires_grad = False
+            for p in self.output_head.parameters(): p.requires_grad = False
+        else:
+            print("[Teacher] WARNING: No adapter weights loaded! Initializing randomly (BAD for Distillation).")
 
-        # 2. 投影到 LLM 空间
-        # [B, L_sensor, VQ_Dim] -> [B, L_sensor, LLM_Dim]
+    def forward(self, masked_ids):
+        B, T = masked_ids.shape
+        is_mask = (masked_ids == self.mask_token_id)
+
+        safe_ids = masked_ids.clone()
+        safe_ids[is_mask] = 0
+        safe_ids = safe_ids.clamp(0, self.num_vq_codes - 1)
+
+        vq_embeds = F.embedding(safe_ids, self.codebook)
         sensor_embeds = self.projector(vq_embeds)
 
-        # === 3. Prompt 拼接 ===
-        # 构造输入: [Prompt (L_text) + Sensor Data (L_sensor)]
-        # batch_prompt: [B, L_text, LLM_Dim]
+        expanded_mask = self.mask_embed_llama.expand(B, T, -1)
+        mask_broadcast = is_mask.unsqueeze(-1).float()
+        final_sensor_embeds = sensor_embeds * (1 - mask_broadcast) + expanded_mask * mask_broadcast
+
         batch_prompt = self.prompt_embeds.expand(B, -1, -1)
+        inputs_embeds = torch.cat([batch_prompt, final_sensor_embeds], dim=1).to(self.llm.dtype)
 
-        # inputs_embeds: [B, L_text + L_sensor, LLM_Dim]
-        inputs_embeds = torch.cat([batch_prompt, sensor_embeds], dim=1).to(self.llm.dtype)
-
-        # 4. LLM Forward
-        # 只需要 hidden_states，不需要计算原本的 causal loss
         outputs = self.llm(inputs_embeds=inputs_embeds, output_hidden_states=True)
-        # 取最后一层: [B, L_text + L_sensor, LLM_Dim]
         last_hidden = outputs.hidden_states[-1]
 
-        # === 5. 输出切片处理 ===
-        # 我们只关心 Sensor 部分的输出，扔掉 Prompt 部分
-        # [B, L_text + L_sensor, D] -> [B, L_sensor, D]
-        sensor_features = last_hidden[:, self.L_text:, :]
+        L_text = batch_prompt.shape[1]
+        sensor_features = last_hidden[:, L_text:, :]
 
-        # 6. 映射回 VQ 空间
-        # [B, L_sensor, Num_Codes]
         logits = self.output_head(sensor_features.to(torch.float32))
+        probs = F.softmax(logits, dim=-1)
 
-        # === 7. 温度处理 ===
-        # T > 1 会使分布更平滑 (Softer)，包含更多暗知识
-        # T < 1 会使分布更尖锐 (Sharper)
-        probs = F.softmax(logits / self.temperature, dim=-1)
+        class TeacherOut:
+            def __init__(self, probs): self.probs = probs
 
-        return probs, logits
+        return TeacherOut(probs)
+
+
+
+class SoftLlamaTeacherTransformer(nn.Module):
+    def __init__(self, llm_path, adapter_path,codebook_weights, mask_token_id, device):
+        super().__init__()
+        self.device = device
+        self.mask_token_id = mask_token_id
+
+        print(f"[Teacher] Loading Llama from {llm_path}...")
+
+        layer = nn.TransformerEncoderLayer(d_model=512, nhead=4, batch_first=True)
+        self.llm = nn.TransformerEncoder(layer, num_layers=2)
+
+
+        self.llm = AutoModelForCausalLM.from_pretrained(
+            llm_path, torch_dtype=torch.float16, trust_remote_code=True
+        ).to(device).eval()
+        self.tokenizer = AutoTokenizer.from_pretrained(llm_path)
+        for p in self.llm.parameters(): p.requires_grad = False
+
+        # self.llm_dim = 512
+        self.llm_dim = self.llm.config.hidden_size
+        self.register_buffer("codebook", codebook_weights.to(device))
+        self.num_vq_codes = self.codebook.shape[0]
+        self.vq_dim = self.codebook.shape[1]
+
+        self.projector = nn.Linear(self.vq_dim, self.llm_dim).to(device)
+        self.mask_embed_llama = nn.Parameter(torch.randn(1, 1, self.llm_dim).to(device))
+        self.output_head = nn.Linear(self.llm_dim, self.num_vq_codes).to(device)
+
+
+
+    def forward(self, vq_vecs, mask):
+        B, T = vq_vecs.shape
+
+
+
+        vq_embeds = F.embedding(vq_vecs, self.codebook)
+        sensor_embeds = self.projector(vq_embeds)
+
+        # expanded_mask = mask.unsqueeze(-1) # 这里保持它是 Boolean 类型
+
+        # 语义：如果是 Mask (True)，就用 mask_embed；否则 (False)，用 sensor_embeds
+        # torch.where(condition, x, y) -> condition 为 True 选 x，为 False 选 y
+        # final_sensor_embeds = torch.where(expanded_mask, self.mask_embed_llama, sensor_embeds)
+
+        # m = expanded_mask.float()
+        # alpha = float(getattr(self, "mask_alpha", 0.8))  # 0.5~0.8 试试
+        # final_sensor_embeds = (1 - alpha * m) * sensor_embeds + (alpha * m) * self.mask_embed_llama
+
+        # one_expand_mask = 1-expanded_mask
+        #
+        # final_sensor_embeds= sensor_embeds*one_expand_mask  + expanded_mask* self.mask_embed_llama
+
+        inputs_embeds = sensor_embeds#.to(self.llm.dtype)
+
+        outputs = self.llm(inputs_embeds=inputs_embeds, output_hidden_states=True)
+        last_hidden = outputs.hidden_states[-1]
+        # outputs = self.llm(inputs_embeds)
+        # last_hidden = outputs
+
+        sensor_features = last_hidden
+
+        logits = self.output_head(sensor_features.to(torch.float32))
+        probs = F.softmax(logits, dim=-1)
+
+        class TeacherOut:
+            def __init__(self, probs,logits):
+                self.probs = probs
+                self.logits =logits
+
+        return TeacherOut(probs,logits)
+
 
 # ==============================================================================
 # Part 3: Student Components (Conv Patch Embedding + Transformer)
@@ -516,18 +581,19 @@ class PatchEmbeddingConv(nn.Module):
         # x: [B, L_pad, C]
         B, L, C = x.shape
 
+        label_res = torch.reshape(x,(B, self.num_patches, self.patch_len, -1))
         # 1. Conv Stem
         h = self.stem(x.transpose(1, 2)).transpose(1, 2)  # [B, L, D]
 
         # 2. Patchify
         # [B, L, D] -> [B, P, patch_len, D]
-        h = torch.reshape(h,(B, self.num_patches, self.patch_len, self.embed_dim))
+        h = torch.reshape(h,(B, self.num_patches, self.patch_len, self.embed_dim)) # 32 16 8 256
         # Flatten patches: [B, P, patch_len*D]
 
-        h = torch.reshape(h,(B, self.num_patches, self.patch_len * self.embed_dim))
+        h = torch.reshape(h,(B, self.num_patches, self.patch_len * self.embed_dim)) # 32 16 2048
 
         # 3. Project
-        h = self.proj(h)  # [B, P, D]
+        h = self.proj(h)  # [B, P, D] 32 16 256
         h = self.norm(h)
         h = h + self.pos_embed
 
@@ -537,7 +603,7 @@ class PatchEmbeddingConv(nn.Module):
             mask_tokens = self.mask_token.expand(B, self.num_patches, self.embed_dim)
             h = h * (1 - w) + mask_tokens * w
 
-        return h
+        return h, label_res
 
 
 class StrongStudent(nn.Module):
@@ -556,12 +622,180 @@ class StrongStudent(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.vocab_head = nn.Linear(dim_model, num_vq_codes)
+        self.regression_head = nn.Linear(dim_model, patch_len * in_channels)
 
     def forward(self, x, mask_bool=None):
-        emb = self.patch_embed(x, mask_bool)
+        emb,label_res = self.patch_embed(x, mask_bool)
         feat = self.transformer(emb)
         logits = self.vocab_head(feat)
-        return logits, feat
+        pred_len = self.regression_head(feat)
+        label_res = torch.reshape(label_res,(label_res.shape[0],label_res.shape[1],-1))
+        return logits, feat,emb,pred_len,label_res
+
+
+import torch
+import numpy as np
+
+
+class HybridMaskGenerator:
+    def __init__(self,
+                 seq_len=50,
+                 mask_ratio_random=(0.4, 0.4),  # 随机掩码遮盖 40%-60%
+                 mask_len_block=(5, 5),  # 块状掩码遮盖连续 5-15 个点
+                 random_prob=0.8):  # 80% 的概率用随机掩码
+        self.seq_len = seq_len
+        self.mask_ratio_random = mask_ratio_random
+        self.mask_len_block = mask_len_block
+        self.random_prob = random_prob
+
+    def __call__(self, batch_size, device='cpu'):
+        """
+        生成混合策略的 Mask 矩阵
+        返回: mask (Batch, Seq_Len), 1表示遮盖, 0表示可见
+        """
+        # 初始化全 0 (全可见)
+        mask = torch.zeros(batch_size, self.seq_len, device=device)
+
+        # 决定每个样本用哪种策略 (80% Random, 20% Block)
+        # 生成一个随机向量 [0.1, 0.9, 0.3, ...]
+        strategy_probs = torch.rand(batch_size, device=device)
+
+        # === 策略 A: 随机掩码 (Random Masking) ===
+        # 选出 random_prob 概率下的样本索引
+        random_indices = torch.where(strategy_probs < self.random_prob)[0]
+        if len(random_indices) > 0:
+            # 为每个样本随机生成一个遮盖比例 (例如 0.45, 0.55...)
+            r_min, r_max = self.mask_ratio_random
+            # 随机生成噪声矩阵
+            rand_noise = torch.rand(len(random_indices), self.seq_len, device=device)
+            # 生成阈值矩阵
+            thresholds = torch.rand(len(random_indices), 1, device=device) * (r_max - r_min) + r_min
+            # 小于阈值的地方设为 1 (遮盖)
+            mask[random_indices] = (rand_noise < thresholds).float()
+
+        # === 策略 B: 块状掩码 (Block Masking) ===
+        # 选出剩余 20% 的样本索引
+        block_indices = torch.where(strategy_probs >= self.random_prob)[0]
+        if len(block_indices) > 0:
+            b_min, b_max = self.mask_len_block
+            for idx in block_indices:
+                # 随机决定遮盖长度
+                length = torch.randint(b_min, b_max + 1, (1,)).item()
+                # 随机决定起点 (保证不越界)
+                start = torch.randint(0, self.seq_len - length + 1, (1,)).item()
+                # 填 1
+                mask[idx, start: start + length] = 1.0
+
+        return mask
+
+
+import torch
+import torch.nn as nn
+
+
+# --- 简单的 Mock Teacher (为了演示输入输出，不加载真实权重) ---
+class MockSoftLlamaTeacher(nn.Module):
+    def __init__(self, embed_dim=256, num_codes=1024):
+        super().__init__()
+        # 模拟 Projector
+        self.projector = nn.Linear(embed_dim, 512)
+        # 模拟 Llama (单向注意力)
+        # 这里用简单的 TransformerEncoder 模拟，真实代码请用 AutoModelForCausalLM
+        layer = nn.TransformerEncoderLayer(d_model=512, nhead=4, batch_first=True)
+        self.llm_mock = nn.TransformerEncoder(layer, num_layers=2)
+        self.head = nn.Linear(512, num_codes)
+        self.mask_token = nn.Parameter(torch.randn(1, 1, 512))
+
+    def forward(self, vq_vecs, mask):
+        # 1. 投影
+        x = self.projector(vq_vecs)  # (B, L, 512)
+
+        # 2. 应用 Mask (关键步骤！)
+        # mask shape: (B, L) -> (B, L, 1)
+        mask_expanded = mask.unsqueeze(-1)
+        # 遮盖处替换为 mask_token
+        x = x * (1 - mask_expanded) + self.mask_token * mask_expanded
+
+        # 3. 喂给 LLM
+        # 注意：真实 Llama 会在这里自动处理 Causal Mask
+        # 只要输入 x 里包含了 mask_token，Llama 就会基于 mask_token 之前的历史来预测
+        # 不需要任何额外的 for 循环
+        out = self.llm_mock(x)
+
+        return self.head(out)
+
+
+# --- 验证主程序 ---
+def verify_strategy():
+    print("=== 开始验证 80/20 混合掩码策略 ===\n")
+
+    # 1. 实例化生成器
+    BATCH_SIZE = 10
+    SEQ_LEN = 20
+    generator = HybridMaskGenerator(
+        seq_len=SEQ_LEN,
+        random_prob=0.8,  # 80% 概率用随机
+        mask_ratio_random=(0.4, 0.4),
+        mask_len_block=(5, 5)  # 块状遮盖 3-6 个点
+    )
+
+    # 2. 生成一个 Batch 的 Mask
+    mask = generator(BATCH_SIZE)
+
+    # 3. 统计并打印，证明策略生效
+    print(f"生成的 Mask 形状: {mask.shape}")
+    print("-" * 40)
+
+    random_count = 0
+    block_count = 0
+
+    for i in range(BATCH_SIZE):
+        m = mask[i].numpy()
+        masked_ratio = m.sum() / SEQ_LEN
+
+        # 简单的启发式判断：如果有一大段连续的 1，可能是 Block；如果比较碎，是 Random
+        # 这里通过打印直观观察
+        vis_str = "".join(["█" if x == 1 else "." for x in m])
+
+        # 判断类型 (仅用于演示区分)
+        # 随机掩码通常遮盖率高 (40%-60%)，且分散
+        # 块状掩码遮盖率低 (3/20=15% ~ 6/20=30%)，且连续
+        is_block = False
+        # 检查是否只有一段连续的 1
+        diff = np.diff(np.concatenate(([0], m, [0])))
+        starts = np.where(diff == 1)[0]
+        ends = np.where(diff == -1)[0]
+        if len(starts) == 1 and (ends[0] - starts[0]) <= 6:
+            is_block = True
+
+        type_str = "Block (块状)" if is_block else "Random (随机)"
+        if is_block:
+            block_count += 1
+        else:
+            random_count += 1
+
+        print(f"样本 {i}: {vis_str} | 遮盖率: {masked_ratio:.2f} | 策略: {type_str}")
+
+    print("-" * 40)
+    print(f"统计结果: Random ≈ {random_count}, Block ≈ {block_count}")
+    print("注意：由于概率通过随机采样 (torch.rand)，小 Batch 下可能不完全是 8:2，大 Batch 会趋近。\n")
+
+    # 4. 验证送入 Teacher 的流程
+    print("=== 验证 Teacher 前向传播 ===")
+    teacher = MockSoftLlamaTeacher()
+    dummy_vq = torch.randn(BATCH_SIZE, SEQ_LEN, 256)  # 模拟 VQ 向量
+
+    # 直接 Forward！不需要特殊的循环
+    try:
+        logits = teacher(dummy_vq, mask)
+        print("✅ Teacher Forward 成功！")
+        print(f"输入形状: {dummy_vq.shape}")
+        print(f"Mask形状: {mask.shape}")
+        print(f"输出 Logits: {logits.shape} (Batch, Seq_Len, Num_Codes)")
+        print("\n结论：无需修改 Teacher 代码，直接传入混合 Mask 即可。")
+        print("Llama 会根据 Mask 后的输入序列，利用自回归特性自动计算每个位置的预测。")
+    except Exception as e:
+        print(f"❌ 出错了: {e}")
 
 
 # ==============================================================================
@@ -663,13 +897,20 @@ class Model(nn.Module):
             alignment_path = self.ds_cfg.get("alignment_path", None)
             adapter_path = alignment_path+ os.sep + "best_wrapper.pth"
             adapter_path = None
-            self.teacher = SoftLlamaTeacher(
+            self.teacher = SoftLlamaTeacherTransformer(
                 llm_path=args.llama_name,
                 adapter_path=adapter_path,
                 codebook_weights=codebook_weights,
                 mask_token_id=self.mask_token_id,
                 device=self.device
             )
+            # self.teacher = SoftLlamaTeacher(
+            #     llm_path=args.llama_name,
+            #     adapter_path=adapter_path,
+            #     codebook_weights=codebook_weights,
+            #     mask_token_id=self.mask_token_id,
+            #     device=self.device
+            # )
 
         # --- 5. Classifier (Stage 2) ---
         if self.stage == 2:
@@ -702,16 +943,8 @@ class Model(nn.Module):
         if not torch.is_tensor(x_imu): x_imu = torch.as_tensor(x_imu)
         B, L_orig, C = x_imu.shape
 
-        # ===========================================================
-        # Step 0: 统一 Padding (关键!)
-        # 1. Pad 输入数据到 VQ Stride 的倍数
-        # ===========================================================
+        # Step 0: Padding Logic
         x_pad, L_pad = _pad_to_multiple(x_imu, self.vq_stride, pad_value=0.0)
-        # x_pad: [B, seq_len_pad, C]
-
-        # 2. 生成 Loss Mask (用于忽略 Padding 区域的 Loss)
-        # L_orig 是原始有效长度。计算有多少个 Patch 是有效的。
-        # 例如: Orig=195, Stride=8 -> 24 个有效 Patch (24*8=192), 第 25 个 Patch 包含填充数据
         valid_patches = L_orig // self.patch_len
         loss_valid_mask = torch.zeros((B, self.P), device=self.device, dtype=torch.bool)
         loss_valid_mask[:, :valid_patches] = True
@@ -721,80 +954,92 @@ class Model(nn.Module):
         # ====================
         if self.stage == 1:
             with torch.no_grad():
-                # VQ-VAE 的 get_token_ids 必须接收 Pad 后的数据
-                # 如果你的 VQ-VAE 内部没有自动 Pad，这里传 x_pad 是最安全的
                 gt_ids = self.vq_net.get_token_ids(x_pad)
+                if gt_ids.shape[1] != self.P:
+                    if gt_ids.shape[1] > self.P:
+                        gt_ids = gt_ids[:, :self.P]
+                    else:
+                        raise ValueError(f"VQ Tokens {gt_ids.shape[1]} < Student Patches {self.P}")
 
-                # 安全断言：确保 VQ 输出的 Token 数与 Student 的 Patch 数对齐
-            if gt_ids.shape[1] != self.P:
-                # 容错：如果 VQ 内部处理导致稍微多了点，强行截断对齐
-                if gt_ids.shape[1] > self.P:
-                    gt_ids = gt_ids[:, :self.P]
-                else:
-                    raise ValueError(f"VQ Tokens {gt_ids.shape[1]} < Student Patches {self.P}")
-
-            # 生成 Masking (BEiT 任务)
+            # Student Masking
             mask_bool = self.random_masking(x_pad.size(0), self.P, self.mask_rate)
-            # mask_bool = self.random_masking(x_pad.size(0), self.P, 0.4)
 
-            # Student Forward
-            student_logits, _ = self.student(x_pad, mask_bool)  # [B, P, K]
+            # Student Forward (Student 依然只看 Mask 后的数据)
+            student_logits, feat, emb, pred_len, label_res = self.student(x_pad, mask_bool)
 
             # --- Calculation with Loss Mask ---
-            # 只有 (被 Mask 的位置) AND (不是 Padding 的位置) 才计算 Loss
+            # 基础 Mask: (被遮挡) AND (非 Padding 区域)
             final_mask = mask_bool & loss_valid_mask
 
             target_masked = gt_ids[final_mask]
             pred_masked = student_logits[final_mask]
 
+            # Loss 1: MSE (Student 回归)
+            target_pixels = label_res[final_mask]
+            pred_pixels_masked = pred_len[final_mask]
+            loss_mse_student = F.mse_loss(pred_pixels_masked, target_pixels)
+
+            # Loss 2: Recon (Student 分类)
             if target_masked.numel() > 0:
                 loss_recon = F.cross_entropy(pred_masked, target_masked)
             else:
                 loss_recon = torch.tensor(0.0, device=self.device, requires_grad=True)
 
-            # Distill Loss
+            # Loss 3: Distill with Confidence Gating (Scheme 2)
             loss_distill = torch.tensor(0.0, device=self.device)
+
             if self.teacher is not None and self.lambda_distill > 0:
-                # teacher_input_ids = gt_ids.clone()
-                # teacher_input_ids[mask_bool] = self.mask_token_id
+                with torch.no_grad():  # 确保 Teacher 不计算梯度
+                    # Teacher Forward: 传入 None 作为 mask，让老师看全图 (Scheme 1)
+                    teacher_out = self.teacher(gt_ids, mask=None)
 
-                # 1. 获取 Teacher 输出
-                t_probs, t_logits = self.teacher(gt_ids)
+                # 拿到 Teacher 的概率分布
+                t_probs_all = teacher_out.probs.detach()
 
-                # 2. 计算 Teacher 自身的重构 Loss (确保 Teacher 并没有在乱讲)
-                # Teacher 也要努力预测正确的 gt_ids
-                loss_teacher_recon = F.cross_entropy(t_logits.view(-1, self.num_primitives), gt_ids.view(-1))
+                # --- Scheme 2: 动态置信度过滤 (Confidence Gating) ---
+                # 1. 计算 Teacher 在每个位置的最大置信度
+                # max_probs: [B, P]
+                max_probs, _ = t_probs_all.max(dim=-1)
 
-                s_log_probs = F.log_softmax(student_logits[final_mask], dim=-1)
-                t_probs = t_probs[final_mask].detach()
+                # 2. 设定阈值 (例如 0.5 到 0.8，建议从 0.6 开始尝试)
+                # 只有当老师的确信度 > 0.6 时，才向它学习。否则老师也是瞎猜，不学。
+                conf_threshold = 0.1
+                is_confident = max_probs > conf_threshold
 
+                # 3. 最终蒸馏 Mask = (被遮挡) & (有效区域) & (老师很自信)
+                distill_mask_indices = final_mask & is_confident
+
+                # 准备蒸馏数据
+                s_log_probs = F.log_softmax(student_logits[distill_mask_indices], dim=-1)
+                t_probs_filtered = t_probs_all[distill_mask_indices]
+
+                # 计算 KL 散度
                 if s_log_probs.numel() > 0:
-                    loss_distill = F.kl_div(s_log_probs, t_probs.detach(), reduction='batchmean')
-            loss_total = loss_recon + self.lambda_distill * loss_distill + loss_teacher_recon
+                    loss_distill = F.kl_div(s_log_probs, t_probs_filtered, reduction='batchmean')
 
-            return loss_total, student_logits, {
+            # Total Loss (移除了 loss_recon_teacher)
+            loss_total = (self.args.loss_recon_weight * loss_recon) + \
+                         (self.args.loss_distill_weight * self.lambda_distill * loss_distill) + \
+                         (self.args.loss_mse_student_weight * loss_mse_student)
+
+            meta = {}
+            meta = {
                 "loss_recon": loss_recon.item(),
                 "loss_distill": loss_distill.item(),
-                "loss_total": loss_total.item()
+                "loss_total": loss_mse_student.item()
             }
 
-        # ====================
-        # Stage 2: Classify
-        # ====================
+            return loss_total, student_logits, meta
+
+        # Stage 2: Classify (保持不变)
         elif self.stage == 2:
             # Student Forward
-            _, feat = self.student(x_pad, mask_bool=None)  # [B, P, D]
-
-            # --- Pooling with Mask ---
-            # 只对有效的 Patch 进行平均，忽略 Padding 部分
-            # feat: [B, P, D] -> [B, valid_patches, D]
+            _, feat, _, _, _ = self.student(x_pad, mask_bool=None)
             feat_valid = feat[:, :valid_patches, :]
-
-            # Global Pooling
-            global_feat = feat_valid.mean(dim=1)  # [B, D]
-
-            logits = self.classifier(global_feat)  # [B, num_class]
+            global_feat = feat_valid.mean(dim=1)
+            logits = self.classifier(global_feat)
             return logits
+
 
     def save_wrapper(self, path):
         sd = self.state_dict()
@@ -978,7 +1223,18 @@ def get_configs():
     args = parser.parse_args()
     return args
 
+
+# [Stage2-Test] loss:0.267678 acc:0.917204 f1_macro:0.918929 recall_macro:0.919186 precision_macro:0.920217 infer_total_time:0.164891 infer_ms_per_sample:0.055952 infer_samples_per_sec:17872.438032 infer_total_samples:2947
+# [Stage2-Test] loss:0.268715 acc:0.921615 f1_macro:0.923389 recall_macro:0.924182 precision_macro:0.924305 infer_total_time:0.178396 infer_ms_per_sample:0.060535 infer_samples_per_sec:16519.452009 infer_total_samples:2947
+# [Stage2-Test] loss:0.215494 acc:0.927384 f1_macro:0.928973 recall_macro:0.928862 precision_macro:0.930301 infer_total_time:0.172051 infer_ms_per_sample:0.058382 infer_samples_per_sec:17128.623041 infer_total_samples:2947
+
+
 if __name__ == '__main__':
+
+
+
+    verify_strategy()
+
     configs = get_configs()
     configs.ts_backbone_yaml = r"D:\fuy\MyCode\SensorLLMLib_v2\configs\ts_backbone.yaml"
     configs.debug_fake_llm = True

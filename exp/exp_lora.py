@@ -190,7 +190,7 @@ class TeeLogger:
                 f.flush()
 
 
-class Exp_Classification(Exp_Basic):
+class Exp_Lora(Exp_Basic):
     """
     V2-fixed:
       - optimizer param groups (decay/no_decay)
@@ -364,7 +364,7 @@ class Exp_Classification(Exp_Basic):
             self.args.enc_in = int(self.args.ds_cfg.get("channel_num", self.args.enc_in))
             self.args.num_class = int(self.args.ds_cfg.get("num_labels", getattr(self.args, "num_class", 12)))
 
-        model = self.model_dict[self.args.model].Model(self.args).float()
+        model = self.model_dict[self.args.model].SensorLoRAModel(self.args).float()
         if self.args.use_multi_gpu and self.args.use_gpu:
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
         return model
@@ -556,10 +556,10 @@ class Exp_Classification(Exp_Basic):
             raise RuntimeError(f"classify output must be [B,num_class], got {tuple(out.shape)}")
         return out
 
-    def _forward_pretrain_loss(self, batch_x, padding_mask,mean,var,target):
+    def _forward_pretrain_loss(self, batch_x, padding_mask):
         if not self._is_two_stage_model():
             raise RuntimeError("This model does not support pretrain stage.")
-        out = self.model(batch_x, padding_mask, mode="pretrain",mean=mean,var=var,target=target)
+        out = self.model(batch_x, padding_mask, mode="pretrain")
         if not isinstance(out, (tuple, list)) or len(out) < 1:
             raise RuntimeError("pretrain forward must return (loss_mse, ...)")
         loss_mse = out[0]
@@ -698,13 +698,10 @@ class Exp_Classification(Exp_Basic):
         self.model.eval()
         losses = []
         with torch.no_grad():
-            for batch_x, label, padding_mask,mean,var in loader:
+            for batch_x, _, padding_mask in loader:
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = self._to_bool_mask(padding_mask)
-                label=label.to(self.device)
-                target = label.long().view(-1)
-
-                loss_mse = self._forward_pretrain_loss(batch_x, padding_mask,mean=mean,var=var,labels=target)
+                loss_mse = self._forward_pretrain_loss(batch_x, padding_mask)
                 losses.append(float(loss_mse.item()))
         self.model.train()
         return float(np.mean(losses)) if len(losses) else 0.0
@@ -794,19 +791,65 @@ class Exp_Classification(Exp_Basic):
         # =========================
         # ✅ helper: collect embeddings for KMeans (defined ONCE)
         # =========================
+        @torch.no_grad()
+        def collect_embeddings(model, loader, device,
+                               max_batches=200, max_points=200000, per_batch_cap=4096):
+            model.eval()
+            zs, n_points = [], 0
+            for bi, (batch_x, _, _) in enumerate(loader):
+                if bi >= max_batches:
+                    break
+                batch_x = batch_x.float().to(device)
 
+                if hasattr(model, "_align_seq_len"):
+                    batch_x = model._align_seq_len(batch_x)
+
+                norm_eps = float(getattr(model, "norm_eps", 1e-5))
+                mu = batch_x.mean(dim=1, keepdim=True)
+                sigma = batch_x.std(dim=1, keepdim=True).clamp_min(norm_eps)
+                x_norm = (batch_x - mu) / sigma
+
+                # IMPORTANT: use unmasked embeddings
+                _, z_prepos = model.patch_embed(x_norm, patch_mask=None, return_pre_pos=True)  # [B,P,D]
+                z = z_prepos
+                z = z.reshape(-1, z.shape[-1])  # [B*P,D]
+
+                if z.shape[0] > per_batch_cap:
+                    idx = torch.randperm(z.shape[0], device=z.device)[:per_batch_cap]
+                    z = z[idx]
+
+                z_np = z.detach().float().cpu().numpy()
+                zs.append(z_np)
+                n_points += z_np.shape[0]
+                if n_points >= max_points:
+                    break
+
+            X = np.concatenate(zs, axis=0) if len(zs) else None
+            if X is None or X.shape[0] == 0:
+                raise RuntimeError("collect_embeddings got empty X. Check dataloader / batch shapes.")
+            if X.shape[0] > max_points:
+                X = X[np.random.permutation(X.shape[0])[:max_points]]
+            return X
+
+        # =========================
+        # ✅ enable KD ONCE flag
+        # =========================
+        kd_enabled = False
+
+        # 你可以用这个参数控制：第几个 epoch 后开始建 centers 并 enable_kd
+        # 推荐：>=1 或 >=warmup_epochs（你自己调）
+        kmeans_trigger_epoch = int(getattr(self.args, "kmeans_trigger_epoch", 1))  # 1 表示第1个epoch结束后就触发
 
         for epoch in range(self.args.train_epochs):
             self.model.train()
             tr = []
 
-            for batch_x, label, padding_mask ,mean,var in train_loader:
+            for batch_x, _, padding_mask in train_loader:
                 opt.zero_grad()
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = self._to_bool_mask(padding_mask)
-                label = label.to(self.device)
-                target = label.long().view(-1)
-                loss_mse = self._forward_pretrain_loss(batch_x, padding_mask,mean=mean,var=var,labels=target)
+
+                loss_mse = self._forward_pretrain_loss(batch_x, padding_mask)
                 loss_mse.backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
                 opt.step()
@@ -863,6 +906,104 @@ class Exp_Classification(Exp_Basic):
                         "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     }, f, ensure_ascii=False, indent=2)
 
+            # ==========================================================
+            # ✅ (Optional) build KMeans centers ONCE + enable KD + rebuild opt/scheduler
+            # ==========================================================
+
+                    # ==========================================================
+                    # ✅ 自动判定特征是否稳定，稳定后触发 KMeans + KD
+                    # ==========================================================
+                    is_plateau = False
+                    if not kd_enabled:
+                        if best_val is not None:
+                            improvement = (best_val_mse - val_mse) / (best_val_mse + 1e-9)
+                            if improvement < improvement_threshold:
+                                plateau_count += 1
+                            else:
+                                plateau_count = 0  # 还在显著下降，清零计数
+
+                            if plateau_count >= patience:
+                                is_plateau = True
+
+                        best_val_mse = min(best_val_mse, val_mse)
+
+                    # 触发条件：达到平台期 OR 达到强制最大的预热 epoch (比如 10)
+                    max_warmup = int(getattr(self.args, "max_warmup_epochs", 5))
+                    force_trigger = (epoch + 1) >= max_warmup
+                    if (not kd_enabled) and int(getattr(self.args, "build_kmeans_centers", 1)) and (is_plateau or force_trigger):
+                        K = int(getattr(self.args, "primitive_K", 32))
+                        out_path = str(getattr(self.args, "kmeans_centers_out", "")).strip()
+                        if not out_path:
+                            out_path = os.path.join(paths["meta_dir"], f"kmeans_centers_K{K}.pt")
+
+                        # 1) 可选：用 best_wrapper 加载“最佳”表征来做聚类（你想这样就这样）
+                        #    如果你不想回滚训练轨迹，把下面这段注释掉即可（更“连续训练”）。
+                        m = _unwrap(self.model)
+                        # 0) save current training weights (and RNG state optional)
+                        sd_cur = copy.deepcopy(m.state_dict())
+
+                        # c = hasattr(m, "load_wrapper")
+                        # d = os.path.isfile(paths["stage1_wrapper"])
+                        if hasattr(m, "load_wrapper") and os.path.isfile(paths["stage1_wrapper"]):
+                            m.load_wrapper(paths["stage1_wrapper"], map_location=self.device)
+                            self.log(f"[KMeans] loaded best wrapper for clustering: {paths['stage1_wrapper']}")
+
+                        # 2) collect embeddings
+                        X = collect_embeddings(
+                            m, train_loader, self.device,
+                            max_batches=int(getattr(self.args, "kmeans_max_batches", 200)),
+                            max_points=int(getattr(self.args, "kmeans_max_points", 200000)),
+                            per_batch_cap=int(getattr(self.args, "kmeans_per_batch_cap", 4096))
+                        )
+                        self.log(f"[KMeans] collected X={X.shape}")
+
+                        km = MiniBatchKMeans(
+                            n_clusters=K,
+                            batch_size=int(getattr(self.args, "kmeans_batch_size", 4096)),
+                            n_init=int(getattr(self.args, "kmeans_n_init", 10)),
+                            max_iter=int(getattr(self.args, "kmeans_max_iter", 200)),
+                            verbose=1
+                        )
+                        km.fit(X)
+
+                        centers = torch.tensor(km.cluster_centers_, dtype=torch.float32)
+
+                        # 4) restore current training weights (IMPORTANT!)
+                        m.load_state_dict(sd_cur, strict=True)
+                        self.log("[KMeans] restored current training weights after clustering.")
+
+                        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                        torch.save(centers, out_path)
+                        self.log(f"[KMeans] saved centers: {out_path} shape={tuple(centers.shape)}")
+
+                        status_path = os.path.join(paths["meta_dir"], "status_kmeans.json")
+                        with open(status_path, "w", encoding="utf-8") as f:
+                            json.dump({
+                                "kmeans_centers_path": out_path,
+                                "kmeans_centers_exists": os.path.exists(out_path),
+                                "K": int(K),
+                                "D": int(centers.shape[1]),
+                                "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            }, f, ensure_ascii=False, indent=2)
+                        self.log(f"[save] kmeans status = {status_path}")
+
+                        # 3) ✅ inject centers + enable KD
+                        if not hasattr(m, "set_kmeans_centers"):
+                            raise RuntimeError("Your Model must implement set_kmeans_centers(centers).")
+                        if not hasattr(m, "enable_kd"):
+                            raise RuntimeError("Your Model must implement enable_kd().")
+
+                        m.set_kmeans_centers(centers)
+                        m.enable_kd()
+                        kd_enabled = True
+                        self.log("[KD] enabled. Rebuilding optimizer & scheduler to include missing_head params...")
+
+                        # 4) ✅ 关键：重建 optimizer + scheduler（方案A）
+                        opt = self._select_optimizer()
+                        scheduler = self._build_scheduler(opt, steps_per_epoch=len(train_loader))
+                        self._log_lrs(opt, "[LR] rebuilt_after_kd")
+                        report_trainable_params(self.model)
+        self.model.flush_gt_ids_dump()
 
         return
 
@@ -880,23 +1021,16 @@ class Exp_Classification(Exp_Basic):
         infer_start = time.time()
 
         with torch.no_grad():
-            for batch_x, label, padding_mask,mean,var in loader:
+            for batch_x, label, padding_mask in loader:
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = self._to_bool_mask(padding_mask)
                 label = label.to(self.device)
 
-                outputs = self._forward_classify(batch_x, padding_mask)  # logits [B, C]
-                target = label.long().view(-1)
-                # label_test= label.long().squeeze(-1)
-                # print("target:", target.shape)
-                # print("label_test:", label_test.shape)
-                # print(i)
-                loss = criterion(outputs, target)
-                # loss = criterion(outputs, label.long().squeeze(-1))
+                loss = self.model(batch_x, padding_mask)  # logits [B, C]
 
                 total_loss.append(float(loss.item()))
-                preds.append(outputs.detach())
-                trues.append(label.detach())
+                # preds.append(outputs.detach())
+                # trues.append(label.detach())
                 n_samples_total += batch_x.size(0)
 
         # -------- timing (IMPORTANT: sync at end) --------
@@ -914,78 +1048,53 @@ class Exp_Classification(Exp_Basic):
 
         # -------- aggregate --------
         total_loss = float(np.mean(total_loss)) if len(total_loss) else 0.0
-        preds = torch.cat(preds, 0)  # logits [N, C]
-        trues = torch.cat(trues, 0).flatten()  # [N]
+        # preds = torch.cat(preds, 0)  # logits [N, C]
+        # trues = torch.cat(trues, 0).flatten()  # [N]
 
         # numpy
-        logits_np = preds.detach().cpu().numpy()
-        trues_np = trues.detach().cpu().numpy()
-        trues_np = np.squeeze(trues_np)  # 保险: (N,1) -> (N,)
+        # logits_np = preds.detach().cpu().numpy()
+        # trues_np = trues.detach().cpu().numpy()
+        # trues_np = np.squeeze(trues_np)  # 保险: (N,1) -> (N,)
 
         # pred / probs
-        predictions = np.argmax(logits_np, axis=1)
+        # predictions = np.argmax(logits_np, axis=1)
 
         # stable softmax in numpy
-        x = logits_np - np.max(logits_np, axis=1, keepdims=True)
-        exp_x = np.exp(x)
-        probs_np = exp_x / np.sum(exp_x, axis=1, keepdims=True)
+        # x = logits_np - np.max(logits_np, axis=1, keepdims=True)
+        # exp_x = np.exp(x)
+        # probs_np = exp_x / np.sum(exp_x, axis=1, keepdims=True)
 
         # -------- metrics --------
         metrics = {
-            "acc": float(accuracy_score(trues_np, predictions)),
-            "precision_macro": float(precision_score(trues_np, predictions, average="macro", zero_division=0)),
-            "recall_macro": float(recall_score(trues_np, predictions, average="macro", zero_division=0)),
-            "f1_macro": float(f1_score(trues_np, predictions, average="macro", zero_division=0)),
-            "f1_micro": float(f1_score(trues_np, predictions, average="micro", zero_division=0)),
+
             "infer_total_time_s": float(total_time),
             "infer_ms_per_sample": float(ms_per_sample),
             "infer_samples_per_sec": float(samples_per_sec),
             "infer_total_samples": int(n_samples_total),
         }
 
-        # per-class (optional)
-        if bool(getattr(self.args, "report_per_class", False)):
-            p_c = precision_score(trues_np, predictions, average=None, zero_division=0)
-            r_c = recall_score(trues_np, predictions, average=None, zero_division=0)
-            f_c = f1_score(trues_np, predictions, average=None, zero_division=0)
-            for i, (p, r, f) in enumerate(zip(p_c, r_c, f_c)):
-                metrics[f"precision_c{i}"] = float(p)
-                metrics[f"recall_c{i}"] = float(r)
-                metrics[f"f1_c{i}"] = float(f)
 
-        # -------- save (ONLY when save_dir is provided) --------
-        if save_dir is not None:
-            save_dir = to_secure_path(save_dir)
 
-            os.makedirs(save_dir, exist_ok=True)
-
-            # save npy
-            np.save(os.path.join(save_dir, "logits.npy"), logits_np)  # [N, C]
-            np.save(os.path.join(save_dir, "probs.npy"), probs_np)  # [N, C]
-            np.save(os.path.join(save_dir, "pred.npy"), predictions)  # [N]
-            np.save(os.path.join(save_dir, "true.npy"), trues_np)  # [N]
-
-            with open(os.path.join(save_dir, "metrics.json"), "w", encoding="utf-8") as f:
-                json.dump(metrics, f, ensure_ascii=False, indent=2)
-
-            # np.save(os.path.join(save_dir, "metrics.npy"), np.array([
-            #     metrics["acc"],
-            #     metrics["f1_macro"],
-            #     metrics["recall_macro"],
-            #     metrics["precision_macro"],
-            #     metrics["f1_micro"],
-            #     metrics["infer_total_time_s"],
-            #     metrics["infer_ms_per_sample"],
-            #     metrics["infer_samples_per_sec"],
-            #     metrics["infer_total_samples"],
-            # ], dtype=np.float32))
-
-            # confusion
-            conf = confusion_matrix(trues_np, predictions)
-            np.save(os.path.join(save_dir, "confusion.npy"), conf)
         self.model.train()
         return total_loss, metrics
 
+    # -------------------------------------------------------------
+    # 新增：专门用于 LoRA 阶段的验证函数 (只算 Loss，不算 Acc)
+    # -------------------------------------------------------------
+    def vali_lora_loss(self, loader):
+        self.model.eval()
+        total_loss = []
+        with torch.no_grad():
+            for batch_x, _, padding_mask in loader:
+                # 只需要输入数据，不需要 label
+                batch_x = batch_x.float().to(self.device)
+
+                # Model 内部会自动转 Token -> LLM -> Causal Loss
+                loss = self.model(batch_x,None)
+                total_loss.append(loss.item())
+
+        self.model.train()
+        return float(np.mean(total_loss)) if len(total_loss) > 0 else 0.0
     def train(self, setting):
 
         # stage2 load stage1 automatically
@@ -1054,26 +1163,30 @@ class Exp_Classification(Exp_Basic):
         time_now = time.time()
         report_trainable_params(self.model)
         self._log_lrs(opt, "[LR] init")
+        # ==========================================
+        # 1. 在循环开始前，定义 Best Score
+        # ==========================================
+        best_score = None
+        monitor = str(getattr(self.args, "monitor", "acc")).lower()
+        # 如果监控 loss，越小越好；如果监控 acc，越大越好
+        monitor_op = min if monitor == "loss" else max
 
         for epoch in range(self.args.train_epochs):
             self.model.train()
             epoch_time = time.time()
             train_loss = []
 
-            for i, (batch_x, label, padding_mask,mean,var) in enumerate(train_loader):
+            for i, (batch_x, label, padding_mask) in enumerate(train_loader):
                 opt.zero_grad()
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = self._to_bool_mask(padding_mask)
-                label = label.to(self.device)
-                target = label.long().view(-1)
 
-                outputs = self._forward_classify(batch_x, padding_mask)
-                # print("outputs:", outputs.shape, "label:", label.shape)
                 # label_test= label.long().squeeze(-1)
                 # print("target:", target.shape)
                 # print("label_test:", label_test.shape)
                 # print(i)
-                loss = criterion(outputs, target)
+                # loss = criterion(outputs, target)
+                loss = self.model(batch_x, padding_mask)
 
                 train_loss.append(float(loss.item()))
 
@@ -1104,78 +1217,90 @@ class Exp_Classification(Exp_Basic):
                 else:
                     scheduler.step()
 
+            # 计算指标
             train_loss = float(np.mean(train_loss)) if len(train_loss) else 0.0
-            # val_loss, val_acc = self.vali_classify(val_loader, criterion)
-            # test_loss, test_acc = self.vali_classify(test_loader, criterion)
-            #
-            # self._log_lrs(opt, f"[LR] epoch={epoch+1}")
+            val_loss= self.vali_lora_loss(val_loader)
+            # test_loss = self.vali_lora_loss(test_loader)
 
-            val_loss, val_m = self.vali_classify(val_loader, criterion)
-            test_loss, test_m = self.vali_classify(test_loader, criterion)
+            self._log_lrs(opt, f"[LR] epoch={epoch + 1}")
 
-            self._log_lrs(opt, f"[LR] epoch={epoch+1}")
-
+            # 打印日志
             self.log(
-                f"[Stage2-Classify] Epoch:{epoch + 1} | Train:{train_loss:.4f} | "
-                f"Val:{val_loss:.4f} acc:{val_m['acc']:.4f} f1m:{val_m['f1_macro']:.4f} recm:{val_m['recall_macro']:.4f} prem:{val_m['precision_macro']:.4f} | "
-                f"Test:{test_loss:.4f} acc:{test_m['acc']:.4f} f1m:{test_m['f1_macro']:.4f} | "
-                f"time:{time.time() - epoch_time:.1f}s"
+                f"[Stage2-Classify] Epoch:{epoch + 1} | "
+                f"Train Loss:{train_loss:.4f} | "
+                f"Val Loss:{val_loss:.4f}  "
+
             )
 
-            #
-            # # 默认训练中不评估 test（科研规范）
-            # if bool(getattr(self.args, "eval_test_during_train", False)):
-            #     test_loss, test_acc = self.vali_classify(test_loader, criterion)
-            #     test_msg = f" | Test:{test_loss:.4f} Acc:{test_acc:.4f}"
-            # else:
-            #     test_msg = ""
-            #
-            # self.log(
-            #     f"[Stage2-Classify] Epoch:{epoch + 1} | Train:{train_loss:.4f} | "
-            #     f"Val:{val_loss:.4f} Acc:{val_acc:.4f}{test_msg} | "
-            #     f"time:{time.time() - epoch_time:.1f}s"
-            # )
-            #
-            # # self.log(f"[Stage2-Classify] Epoch:{epoch + 1} | Train:{train_loss:.4f} | "
-            # #          f"Val:{val_loss:.4f} Acc:{val_acc:.4f} | Test:{test_loss:.4f} Acc:{test_acc:.4f} | "
-            # #          f"time:{time.time() - epoch_time:.1f}s")
+            # ==========================================
+            # 2. 显式保存逻辑 (替代 EarlyStopping 的保存功能)
+            # ==========================================
+            # 获取当前分数
+            current_score = val_loss
 
-            # early stopping
+            save_trigger = False
+            if best_score is None:
+                save_trigger = True
+                best_score = current_score
+            else:
+                # 根据 monitor 类型判断是否变好
+                if monitor == "loss":
+                    if current_score < best_score:
+                        save_trigger = True
+                        best_score = current_score
+                else:  # monitor == "acc"
+                    if current_score > best_score:
+                        save_trigger = True
+                        best_score = current_score
+
+            if save_trigger:
+                self.log(f"[Explicit Save] Best {monitor} updated to {best_score:.6f}. Saving model...")
+
+                # 确保路径存在
+                ckpt_path = os.path.join(path, "checkpoint.pth")
+
+                # A. 标准 PyTorch 保存 (全量参数，最保险)
+                torch.save(self.model.state_dict(), ckpt_path)
+
+                # B. 如果是 LoRA 模型，额外保存一份 Adapter (文件小，推荐)
+                # 检查模型里有没有 save_pretrained 方法 (SensorLoRAModel 有)
+                if hasattr(self.model, "save_pretrained"):
+                    adapter_path = os.path.join(path, "best_adapter")
+                    self.model.save_pretrained(adapter_path)
+                    self.log(f"[Explicit Save] LoRA Adapter saved to {adapter_path}")
+                elif hasattr(self.model, "save_adapter"):
+                    self.model.save_adapter(path)
+
+                # 更新 status json (方便你查进度)
+                status_path = os.path.join(paths["meta_dir"], "status_stage2.json")
+                with open(status_path, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "best_epoch": int(epoch + 1),
+                        "best_val_score": float(best_score),
+                        "monitor": monitor,
+                        "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    }, f, ensure_ascii=False, indent=2)
+
+            # ==========================================
+            # 3. Early Stopping 仅用于“停止”，不再负责保存
+            # ==========================================
+            # 注意：这里传给 ES 的分数逻辑要和 ES 内部匹配
+            # 如果不想改 ES 代码，就只让它做计数器，不指望它保存
             if monitor == "loss":
                 early_stopping(val_loss, self.model, path)
-            else:
-                early_stopping(-val_m["acc"], self.model, path)
-            # ---- write stage2 status (best snapshot if updated) ----
-            status_path = os.path.join(paths["meta_dir"], "status_stage2.json")
-            status_path = to_secure_path(status_path)
-
-            with open(status_path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "monitor": str(monitor),
-                    "last_epoch": int(epoch + 1),
-                    "val_acc": float(val_m["acc"]),
-                    "val_loss": float(val_loss),
-                    "test_acc": float(test_m["acc"]),
-                    "test_loss": float(test_loss),
-                    "artifact_path": paths["stage2_ckpt"],
-                    "artifact_exists": os.path.exists(paths["stage2_ckpt"]),
-                    "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }, f, ensure_ascii=False, indent=2)
 
             if early_stopping.early_stop:
-                self.log("Early stopping")
+                self.log("Early stopping triggered.")
                 break
 
-        # best_model_path = os.path.join(path, "checkpoint.pth")
-        # if os.path.exists(best_model_path):
-        #     self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
+        # ==========================================
+        # 4. 训练结束，加载最佳模型
+        # ==========================================
         best_model_path = os.path.join(path, "checkpoint.pth")
         if os.path.exists(best_model_path):
+            self.log(f"Loading best model from {best_model_path}")
             self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
 
-        # # 最终只评估一次 test（用 val-best）
-        # final_test_loss, final_test_acc = self.vali_classify(test_loader, criterion)
-        # self.log(f"[Stage2-FinalTest] loss:{final_test_loss:.6f} acc:{final_test_acc:.6f}")
         return self.model
 
     def test_classify(self, setting, test=0):
@@ -1228,10 +1353,7 @@ class Exp_Classification(Exp_Basic):
         return test_loss, test_m
 
     def test(self, setting, test=0):
-        st = int(getattr(self.args, "stage", 2))
-        if st == 1:
-            return self.pretrain_test(setting, test=test)
-        return self.test_classify(setting, test=test)
+        return None
 
 
 def get_configs():

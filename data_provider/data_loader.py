@@ -357,11 +357,19 @@ class Dataset_MHealth(Dataset):
         x = X[s + ws : s + we]  # [L, 15] (pure slice)
         if x.shape[0] != self.seq_len:
             raise RuntimeError(f"Window length mismatch got {x.shape[0]} expected {self.seq_len}")
+        # x_raw = X[s + ws: s + we]  # [L, 15]
 
+        # --- 提取统计量 (模仿 PH-LLM) ---
+        # 计算当前窗口 15 个维度的均值和方差
+        means = np.mean(x, axis=0)  # [15]
+        vars = np.var(x, axis=0)  # [15]
+        # 拼接成 30 维特征向量 (Adapter 的输入)
+        # adapter_input = np.concatenate([means, vars], axis=0).astype(np.float32)
+        # ------------------------------
         x = self._apply_norm(x)
         x = torch.from_numpy(x).float()
         y = torch.tensor([self.labels[idx]], dtype=torch.long)
-        return x, y
+        return x, y,means,vars
 
 
 # tttt_dataset.py
@@ -473,6 +481,11 @@ class Dataset_UCIHAR_Official(Dataset):
             n = int(n * float(limit_size)) if limit_size <= 1 else int(limit_size)
             X, y, subj = X[:n], y[:n], subj[:n]
 
+        # --- 提取统计量 ---
+        # X 形状为 [N, 128, 6]
+        # 对 axis=1 (时间轴) 求均值和方差
+        self.X_means = np.mean(X, axis=1)  # [N, 6]
+        self.X_vars = np.var(X, axis=1)  # [N, 6]
         self._X = X
         self._y = y
         self._subj = subj
@@ -506,7 +519,10 @@ class Dataset_UCIHAR_Official(Dataset):
     def __getitem__(self, idx):
         x = torch.from_numpy(self._X[idx]).float()          # [128,6]
         y = torch.tensor([int(self._y[idx])], dtype=torch.long)
-        return x, y
+
+        means_feat = torch.from_numpy(self.X_means[idx]).float()
+        vars_feat = torch.from_numpy(self.X_vars[idx]).float()
+        return x, y,means_feat,vars_feat
 
 
 # ============================================================
@@ -1222,9 +1238,15 @@ class Dataset_USCHAD(Dataset):
         trial_idx, ws, we = self.samples[idx]
         X = self._X_cache[trial_idx]
         x = X[ws:we]
+
+        # --- 提取统计量 ---
+        means = np.mean(x, axis=0)  # [6]
+        vars = np.var(x, axis=0)  # [6]
+        # adapter_feat = np.concatenate([means, vars], axis=0).astype(np.float32)  # [12]
+
         if x.shape[0] != self.seq_len:
             raise RuntimeError(f"Window length mismatch got {x.shape[0]} expected {self.seq_len}")
-        return torch.from_numpy(x).float(), torch.tensor([int(self.labels[idx])], dtype=torch.long)
+        return torch.from_numpy(x).float(), torch.tensor([int(self.labels[idx])], dtype=torch.long),torch.from_numpy(means),torch.from_numpy(vars)
 
 
 # ============================================================
@@ -1531,9 +1553,13 @@ class Dataset_CAPTURE24(Dataset):
         pid, ws, we = self.samples[idx]
         X, _ = self._cache[pid]
         x = X[ws:we]
+
+        # --- 提取统计量 ---
+        means = np.mean(x, axis=0)  # [3]
+        vars = np.var(x, axis=0)  # [3]
         if x.shape[0] != self.seq_len:
             raise RuntimeError(f"{pid}: window mismatch {x.shape[0]} vs {self.seq_len}")
-        return torch.from_numpy(x).float(), torch.tensor([int(self.labels[idx])], dtype=torch.long)
+        return torch.from_numpy(x).float(), torch.tensor([int(self.labels[idx])], dtype=torch.long),torch.from_numpy(means).float(),torch.from_numpy(vars).float()
 
 
 import numpy as np
@@ -1911,11 +1937,13 @@ class Dataset_WISDM(Dataset):
         x = X[seg_s + ws : seg_s + we]  # [L,3]
         if x.shape[0] != self.seq_len:
             raise RuntimeError(f"Window length mismatch got {x.shape[0]} expected {self.seq_len}")
-
+        # --- 提取统计量 ---
+        means = torch.from_numpy(np.mean(x, axis=0)).float()  # [3]
+        vars = torch.from_numpy(np.var(x, axis=0)).float()  # [3]
         x = self._apply_norm(x)
         x = torch.from_numpy(x).float()
         y = torch.tensor([int(self.labels[idx])], dtype=torch.long)
-        return x, y
+        return x, y,means,vars
 
 
 
@@ -3325,11 +3353,14 @@ class Dataset_HHAR_1user(Dataset):
         x = X[s + ws: s + we]  # [L,6]
         if x.shape[0] != self.seq_len:
             raise RuntimeError(f"Window length mismatch got {x.shape[0]} expected {self.seq_len}")
+        # --- 提取统计量 ---
+        means = torch.from_numpy(np.mean(x, axis=0))  # [6]
+        vars = torch.from_numpy(np.var(x, axis=0))  # [6]
 
         x = self._apply_norm(x)
         x = torch.from_numpy(x).float()
         y = torch.tensor([self.labels[idx]], dtype=torch.long)
-        return x, y
+        return x, y,means,vars
 
 
 
@@ -3697,10 +3728,14 @@ class Dataset_MotionSense(Dataset):
         ws, we = meta["win_s"], meta["win_e"]
 
         x = X[ws:we]
+
+        # --- 提取统计量 ---
+        means = torch.from_numpy(np.mean(x, axis=0))
+        vars = torch.from_numpy(np.var(x, axis=0))
         if x.shape[0] != self.seq_len:
             raise RuntimeError(f"Window length mismatch got {x.shape[0]} expected {self.seq_len}")
 
         x = self._apply_norm(x)
         x = torch.from_numpy(x).float()
         y = torch.tensor([int(self.labels[idx])], dtype=torch.long)
-        return x, y
+        return x, y,means,vars
