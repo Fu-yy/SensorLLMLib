@@ -54,7 +54,7 @@ if __name__ == '__main__':
     parser.add_argument('--inverse', action='store_true', help='inverse output datasets', default=False)
 
     # inputation task
-    parser.add_argument('--mask_rate', type=float, default=0.4, help='mask ratio')
+    parser.add_argument('--mask_rate', type=float, default=0.7, help='mask ratio')
 
     # anomaly detection task
     parser.add_argument('--anomaly_ratio', type=float, default=0.25, help='prior anomaly ratio (%%)')
@@ -95,7 +95,7 @@ if __name__ == '__main__':
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=10, help='datasets loader num workers')
-    parser.add_argument('--itr', type=int, default=3, help='experiments times')
+    parser.add_argument('--itr', type=int, default=6, help='experiments times')
     parser.add_argument('--train_epochs', type=int, default=10, help='train epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input datasets')
     parser.add_argument('--patience', type=int, default=3, help='early stopping patience')
@@ -202,6 +202,8 @@ if __name__ == '__main__':
     parser.add_argument('--teacher_mode', type=str, default="online", help='teacher_mode')
     parser.add_argument('--loss_style', type=str, default="all", help='loss_style')
     parser.add_argument('--vqvae_path', type=str, default="vqvae_path", help='vqvae_path')
+    parser.add_argument('--use_hard_label', type=int, default=0, help='use_hard_label')
+    parser.add_argument('--mask_mode', type=str, default="random", help='mask_mode')
 
 
 

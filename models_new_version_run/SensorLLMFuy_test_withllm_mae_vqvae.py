@@ -687,13 +687,37 @@ class Model(nn.Module):
         noise = torch.rand(B, P, device=self.device)
         return noise < mask_ratio
 
+    def get_mask(self, B, P, mask_ratio, mode="random"):
+        if mode == "random":
+            return torch.rand(B, P, device=self.device) < mask_ratio
+
+        elif mode == "block":
+            # 模式 2: Block Mask (连续片段掩码)
+            mask = torch.zeros((B, P), device=self.device, dtype=torch.bool)
+            block_len = max(1, int(P * mask_ratio))  # 掩码长度
+            for i in range(B):
+                start = torch.randint(0, P - block_len + 1, (1,))
+                mask[i, start: start + block_len] = True
+            return mask
+
+        elif mode == "channel":
+            # 模式 3: Channel Mask (在数据输入层模拟，此处返回全 False，但在输入端置零)
+            # 注意：Channel Mask 需要在 forward 最开始对 x_imu 操作
+            return torch.zeros((B, P), device=self.device, dtype=torch.bool)
     def forward(self, x_imu, padding_mask=None, mode=None, labels=None):
         if mode is None:
             mode = "pretrain" if self.stage == 1 else "classify"
 
         if not torch.is_tensor(x_imu): x_imu = torch.as_tensor(x_imu)
         B, L_orig, C = x_imu.shape
+        mask_mode = getattr(self.args, "mask_mode", "random")
 
+        if mask_mode == "channel":
+            # 假设随机关掉 30% 的通道
+            C = x_imu.shape[-1]
+            num_drop = int(C * 0.3)
+            indices = torch.randperm(C)[:num_drop]
+            x_imu[:, :, indices] = 0.0
         # ===========================================================
         # Step 0: 统一 Padding (关键!)
         # 1. Pad 输入数据到 VQ Stride 的倍数
@@ -727,6 +751,7 @@ class Model(nn.Module):
 
             # 生成 Masking (BEiT 任务)
             mask_bool = self.random_masking(x_pad.size(0), self.P, self.mask_rate)
+            mask_bool = self.get_mask(x_pad.size(0), self.P, self.mask_rate, mode=mask_mode)
             # mask_bool = self.random_masking(x_pad.size(0), self.P, 0.4)
 
             # Student Forward
@@ -753,10 +778,24 @@ class Model(nn.Module):
                 teacher_out = self.teacher(teacher_input_ids)
 
                 s_log_probs = F.log_softmax(student_logits[final_mask], dim=-1)
-                t_probs = teacher_out.probs[final_mask].detach()
+                # t_probs = teacher_out.probs[final_mask].detach()
+                #
+                # if s_log_probs.numel() > 0:
+                #     loss_distill = F.kl_div(s_log_probs, t_probs, reduction='batchmean')
 
+                # 在 args 中增加一个 use_hard_label 参数
+                use_hard_label = getattr(self.args, "use_hard_label", 0)
+
+                t_probs = teacher_out.probs[final_mask].detach()  # [N_masked, K]
                 if s_log_probs.numel() > 0:
-                    loss_distill = F.kl_div(s_log_probs, t_probs, reduction='batchmean')
+                    if not use_hard_label:
+                        # 方案 1: Soft Label (KL 散度)
+                        loss_distill = F.kl_div(s_log_probs, t_probs, reduction='batchmean')
+                    else:
+                        # 方案 2: Hard Label (教师预测的最可能 Token 作为标签)
+                        teacher_hard_labels = torch.argmax(t_probs, dim=-1)  # 取概率最大的索引
+                        loss_distill = F.cross_entropy(student_logits[final_mask], teacher_hard_labels)
+
 
             loss_total = loss_recon + self.lambda_distill * loss_distill
 

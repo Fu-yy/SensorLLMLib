@@ -180,11 +180,46 @@ if __name__ == "__main__":
 
     ROOT_DIRECTORY = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260120_194435"
     OUTPUT_FILE = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260120_194435_experiment_results.xlsx"
+    ROOT_DIRECTORY1 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260202_150459_mask_10"
+    OUTPUT_FILE1 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260202_150459_mask_10_experiment_results.xlsx"
+    ROOT_DIRECTORY2 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260203_172320_mask_50"
+    OUTPUT_FILE2 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260203_172320_mask_50_experiment_results.xlsx"
+    ROOT_DIRECTORY3 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260204_190956_mask_70"
+    OUTPUT_FILE3 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260204_190956_mask_70_experiment_results.xlsx"
+    ROOT_DIRECTORY4 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260205_224250_mask_90"
+    OUTPUT_FILE4 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260205_224250_mask_90_experiment_results.xlsx"
+    ROOT_DIRECTORY4 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260208_074133_mask_70"
+    OUTPUT_FILE4 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260208_074133_mask_70_experiment_results.xlsx"
+
+
+
+    ROOT_DIRECTORY5 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260225_200008_mask_70_usehardlabel_1_random"
+    OUTPUT_FILE5 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260225_200008_mask_70_usehardlabel_1_random_experiment_results.xlsx"
+    ROOT_DIRECTORY6 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260227_052927_mask_70_usehardlabel_0_block"
+    OUTPUT_FILE6 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260227_052927_mask_70_usehardlabel_0_block_experiment_results.xlsx"
+    ROOT_DIRECTORY7 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260228_165409_mask_70_usehardlabel_1_channel"
+    OUTPUT_FILE7 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260228_165409_mask_70_usehardlabel_1_channel_experiment_results.xlsx"
+    ROOT_DIRECTORY8 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260211_215828_mask_70"
+    OUTPUT_FILE8 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260211_215828_mask_70_experiment_results.xlsx"
 
     # ROOT_DIRECTORY_02 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260117_210057"
     # OUTPUT_FILE_02 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260117_210057_experiment_results.xlsx"
 
     # ===========================================
 
-    if os.path.exists(ROOT_DIRECTORY):
-        process_logs(ROOT_DIRECTORY, OUTPUT_FILE)
+    # if os.path.exists(ROOT_DIRECTORY1):
+    #     process_logs(ROOT_DIRECTORY1, OUTPUT_FILE1)
+    # if os.path.exists(ROOT_DIRECTORY2):
+    #     process_logs(ROOT_DIRECTORY2, OUTPUT_FILE2)
+    # if os.path.exists(ROOT_DIRECTORY3):
+    #     process_logs(ROOT_DIRECTORY3, OUTPUT_FILE3)
+    # if os.path.exists(ROOT_DIRECTORY4):
+    #     process_logs(ROOT_DIRECTORY4, OUTPUT_FILE4)
+    if os.path.exists(ROOT_DIRECTORY5):
+        process_logs(ROOT_DIRECTORY5, OUTPUT_FILE5)
+    if os.path.exists(ROOT_DIRECTORY6):
+        process_logs(ROOT_DIRECTORY6, OUTPUT_FILE6)
+    if os.path.exists(ROOT_DIRECTORY7):
+        process_logs(ROOT_DIRECTORY7, OUTPUT_FILE7)
+    # if os.path.exists(ROOT_DIRECTORY8):
+    #     process_logs(ROOT_DIRECTORY8, OUTPUT_FILE8)
