@@ -193,12 +193,12 @@ if __name__ == "__main__":
 
 
 
-    ROOT_DIRECTORY5 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260225_200008_mask_70_usehardlabel_1_random"
-    OUTPUT_FILE5 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260225_200008_mask_70_usehardlabel_1_random_experiment_results.xlsx"
-    ROOT_DIRECTORY6 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260227_052927_mask_70_usehardlabel_0_block"
-    OUTPUT_FILE6 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260227_052927_mask_70_usehardlabel_0_block_experiment_results.xlsx"
-    ROOT_DIRECTORY7 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260228_165409_mask_70_usehardlabel_1_channel"
-    OUTPUT_FILE7 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260228_165409_mask_70_usehardlabel_1_channel_experiment_results.xlsx"
+    ROOT_DIRECTORY5 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260306_113654_mask_0.1_usehardlabel_0_mask_mode_block"
+    OUTPUT_FILE5 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260306_113654_mask_0.1_usehardlabel_0_mask_mode_block_experiment_results.xlsx"
+    ROOT_DIRECTORY6 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260307_142305_mask_0.5_usehardlabel_0_mask_mode_block"
+    OUTPUT_FILE6 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260307_142305_mask_0.5_usehardlabel_0_mask_mode_block_experiment_results.xlsx"
+    ROOT_DIRECTORY7 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260308_234529_mask_0.9_usehardlabel_0_mask_mode_block"
+    OUTPUT_FILE7 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260308_234529_mask_0.9_usehardlabel_0_mask_mode_block_experiment_results.xlsx"
     ROOT_DIRECTORY8 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260211_215828_mask_70"
     OUTPUT_FILE8 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\batch_20260211_215828_mask_70_experiment_results.xlsx"
 

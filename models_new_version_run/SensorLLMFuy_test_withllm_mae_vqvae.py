@@ -704,6 +704,35 @@ class Model(nn.Module):
             # 模式 3: Channel Mask (在数据输入层模拟，此处返回全 False，但在输入端置零)
             # 注意：Channel Mask 需要在 forward 最开始对 x_imu 操作
             return torch.zeros((B, P), device=self.device, dtype=torch.bool)
+
+    def get_mask(self, B, P, mask_ratio, mode="random", channel_mask=None):
+        """
+        返回 token-level mask: [B, P], True 表示该 token 被 mask
+        channel_mask: [B, C]，True 表示该 channel 被 mask（仅 channel mode 使用）
+        """
+
+        if mode == "random":
+            return torch.rand(B, P, device=self.device) < mask_ratio
+
+        elif mode == "block":
+            mask = torch.zeros((B, P), device=self.device, dtype=torch.bool)
+            block_len = max(1, int(P * mask_ratio))
+            for i in range(B):
+                start = torch.randint(0, P - block_len + 1, (1,), device=self.device)
+                mask[i, start:start + block_len] = True
+            return mask
+
+        elif mode == "channel":
+            assert channel_mask is not None, "channel_mask must be provided for channel mode"
+            # 👉 channel mask ⇒ 所有 token 位置都 mask
+            # 因为整个序列在这些通道上语义不可观测
+            # token-level mask = True if ANY channel is dropped
+            # （这是保守但 reviewer-safe 的定义）
+            mask = channel_mask.any(dim=1, keepdim=True)  # [B, 1]
+            return mask.expand(B, P)
+
+        else:
+            raise ValueError(f"Unknown mask mode: {mode}")
     def forward(self, x_imu, padding_mask=None, mode=None, labels=None):
         if mode is None:
             mode = "pretrain" if self.stage == 1 else "classify"
@@ -713,11 +742,22 @@ class Model(nn.Module):
         mask_mode = getattr(self.args, "mask_mode", "random")
 
         if mask_mode == "channel":
-            # 假设随机关掉 30% 的通道
             C = x_imu.shape[-1]
-            num_drop = int(C * 0.3)
-            indices = torch.randperm(C)[:num_drop]
-            x_imu[:, :, indices] = 0.0
+            num_drop = max(1, int(C * self.mask_rate))
+
+            channel_mask = torch.zeros(
+                (B, C), device=x_imu.device, dtype=torch.bool
+            )
+
+            for b in range(B):
+                drop_idx = torch.randperm(C, device=x_imu.device)[:num_drop]
+                channel_mask[b, drop_idx] = True
+
+            # 学生端：被 mask 的 channel 全序列置零
+            x_imu = x_imu.clone()
+            x_imu[channel_mask.unsqueeze(1).expand_as(x_imu)] = 0.0
+        else:
+            channel_mask = None
         # ===========================================================
         # Step 0: 统一 Padding (关键!)
         # 1. Pad 输入数据到 VQ Stride 的倍数
@@ -750,8 +790,14 @@ class Model(nn.Module):
                     raise ValueError(f"VQ Tokens {gt_ids.shape[1]} < Student Patches {self.P}")
 
             # 生成 Masking (BEiT 任务)
-            mask_bool = self.random_masking(x_pad.size(0), self.P, self.mask_rate)
-            mask_bool = self.get_mask(x_pad.size(0), self.P, self.mask_rate, mode=mask_mode)
+            # mask_bool = self.get_mask(x_pad.size(0), self.P, self.mask_rate, mode=mask_mode)
+            mask_bool = self.get_mask(
+                B=x_pad.size(0),
+                P=self.P,
+                mask_ratio=self.mask_rate,
+                mode=mask_mode,
+                channel_mask=channel_mask
+            )
             # mask_bool = self.random_masking(x_pad.size(0), self.P, 0.4)
 
             # Student Forward
@@ -793,12 +839,16 @@ class Model(nn.Module):
                         loss_distill = F.kl_div(s_log_probs, t_probs, reduction='batchmean')
                     else:
                         # 方案 2: Hard Label (教师预测的最可能 Token 作为标签)
-                        teacher_hard_labels = torch.argmax(t_probs, dim=-1)  # 取概率最大的索引
-                        loss_distill = F.cross_entropy(student_logits[final_mask], teacher_hard_labels)
+                        # ===== Hard Label Distillation (公平版本) =====
+                        teacher_hard_labels = torch.argmax(t_probs, dim=-1)
 
+                        loss_distill = F.nll_loss(
+                            s_log_probs,
+                            teacher_hard_labels,
+                            reduction="mean"
+                        )
 
             loss_total = loss_recon + self.lambda_distill * loss_distill
-
             return loss_total, student_logits, {
                 "loss_recon": loss_recon.item(),
                 "loss_distill": loss_distill.item(),

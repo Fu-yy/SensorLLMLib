@@ -1515,7 +1515,7 @@ class Dataset_USCHAD(Dataset):
             raise RuntimeError(f"Window length mismatch got {x.shape[0]} expected {self.seq_len}")
 
         # X 已经 float32，from_numpy 后就是 float32 tensor；不需要 .float() 再拷贝
-        x = torch.from_numpy(np.array(x, dtype=np.float32, copy=True))
+        x = torch.from_numpy(np.ascontiguousarray(x))
         return x, torch.tensor([int(self.labels[idx])], dtype=torch.long)
 # ============================================================
 # 4) CAPTURE-24 (dictionary + choose label scheme column)
