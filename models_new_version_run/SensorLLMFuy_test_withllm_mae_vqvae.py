@@ -1,492 +1,59 @@
-# models/SensorLLMResampler.py  (Route A)
+# models_new_version_run/SensorLLMFuy_test_withllm_mae_vqvae.py
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModelForCausalLM
+
+try:
+    import yaml
+except Exception:
+    yaml = None
 
 from models_new_version_run.VQ_VAE import IMU_VQ_Model
-
-'''
-改进：2026年1月19日
-
-这是一个非常深入的技术问题。我会先回答你关于 **UbiPhysio** 论文逻辑的疑问，然后针对你提供的**教师-学生蒸馏架构（Teacher-Student Distillation）**代码给出改进建议。
-
-### 一、 回答你的疑问：UbiPhysio 是怎么做的？
-
-**1. UbiPhysio 的做法（Discrete Seq2Seq）：**
-UbiPhysio 确实是先通过 VQ-VAE 得到离散词表（Codebook Indices），然后**把这些索引当成“单词”**。
-
-* 它们将索引  直接放入 Prompt 字符串中（例如：`"tokens: 12 45 8 99..."`）。
-* 然后输入到一个标准的 **Seq2Seq LLM**（如 T5 或 LLaMA）进行微调。
-* **本质：** 它走的是 **“离散映射”** 路线。LLM 并没有在向量层面与 VQ 空间对齐，而是通过微调学习了“数字序列  代表某种动作描述”的映射关系。
-
-**2. 你的做法（Feature Alignment / Distillation）：**
-你的代码走的是 **“特征对齐/蒸馏”** 路线。
-
-* 你通过 `projector` 将 VQ 向量映射到 LLM 的隐藏层空间。
-* 你的 Teacher 输出的是 `semantic_features`（连续向量），让 Student 去逼近这些向量。
-* **评价：** 你的方案在学术上更接近 **BEiT** 或 **Distill-BERT** 的逻辑。相比 UbiPhysio，这种做法理论上能保留更细粒度的传感器语义，因为你是在 **连续向量空间** 蒸馏知识，而不是仅仅在离散符号上做翻译。
-
----
-
-### 二、 代码改进方案建议
-
-你的代码结构已经非常完整（考虑了 Stride 对齐、Padding Mask 和投影层），但在“蒸馏效能”和“传感器特性”上还有以下改进空间：
-
-#### 1. 改进掩码策略：从“随机掩码”到“块掩码 (Block Masking)”
-
-传感器数据（IMU）在时间上具有极强的连续性。
-
-* **当前问题：** `random_masking` (0.4) 会随机挖掉单个点。由于邻近点非常相似，Student 模型很容易通过插值“偷懒”猜出答案，而学不到高层语义。
-* **建议：** 使用 **Block Masking**（连续挖掉一小段，例如连续 5-10 个 Patch）。这迫使模型根据上下文的运动趋势来恢复语义，能显著提升表征能力。
-
-#### 2. 增强 Teacher 的“上下文”能力
-
-* **当前问题：** 你的 `SoftLlamaTeacher` 的 `forward` 仅仅跑了一个 `projector(vq_embeds)`。
-```python
-semantic_features = self.projector(vq_embeds) 
-
-```
-
-
-这只是**静态特征转换**。它并没有发挥 LLM 的 **Transformer 序列建模** 能力。
-* **建议：** 既然你加载了整个 Llama 模型，应该让数据流过 Llama 的前几层。
-* **做法：** 将 `semantic_features` 拼上 `system_prompt`，输入 LLM 跑 1-2 层（Frozen），取其 Hidden States 作为蒸馏目标。这样 Student 学到的是“经过 LLM 上下文处理后”的语义，而不仅仅是单点的向量对齐。
-
-
-
-#### 3. 引入“温度因子 (Temperature)”与特征归一化
-
-* **当前问题：** Student 特征和 Teacher 特征（LLM 空间）的量级（Magnitude）可能完全不同。直接计算 MSE 会导致 Loss 极难收敛或梯度爆炸。
-* **建议：** 在计算 `loss_distill` 之前，对两个特征进行 **LayerNorm** 或使用 **余弦相似度损失 (Cosine Similarity Loss)** 代替 MSE。
-```python
-# 改进方案
-loss_distill = 1 - F.cosine_similarity(student_mask_feat, teacher_mask_feat, dim=-1).mean()
-
-```
-
-
-
-#### 4. 分类器阶段 (Stage 2) 的 Pooling 策略
-
-* **当前问题：** 你使用了 `global_feat = feat_valid.mean(dim=1)`。
-* **建议：** 对于动作识别，`Mean Pooling` 会抹平运动的时间特征。
-* **方案 A：** 在 Stage 1 引入一个 `[CLS]` Token，Stage 2 只取 `[CLS]` 的输出。
-* **方案 B：** 使用 `Attention Pooling` (通过一个可学习的 Query 聚合所有 Patch 的信息)。
-
-
-
-#### 5. 增加“对比学习”辅助 Loss (Optional)
-
-* **建议：** 在 Stage 1，除了 MSE 蒸馏，可以加一个简单的 **Contrastive Loss (如 InfoNCE)**。让 Student 模型确保“当前 Patch 的特征”与“Teacher 对应的 Patch 特征”最近，而与其他 Patch 远。这能极大增强特征的辨别力。
-
----
-
-### 三、 总结建议的修改点 (代码逻辑)
-
-```python
-# 建议在 Teacher forward 中增加上下文感知
-def forward(self, gt_ids):
-    safe_ids = gt_ids.clamp(0, self.num_vq_codes - 1)
-    vq_embeds = F.embedding(safe_ids, self.codebook) 
-    soft_embeds = self.projector(vq_embeds) # [B, T, llm_dim]
-
-    # 改进：如果显存允许，通过 LLM 跑一圈获得上下文语义
-    # combined_embeds = torch.cat([self.prompt_embeds.expand(B,-1,-1), soft_embeds], dim=1)
-    # with torch.no_grad():
-    #     outputs = self.llm(inputs_embeds=combined_embeds, output_hidden_states=True)
-    #     # 取最后一层 Hidden State 中对应 Sensor 的部分
-    #     semantic_features = outputs.hidden_states[-1][:, self.prompt_input_ids.shape[1]:] 
-
-    return soft_embeds # 或者返回增强后的 semantic_features
-
-```
-
-**你的方案相比 UbiPhysio 的优势：**
-你的架构更像是一个 **“传感器语言模型”的预训练过程**。如果你能完成 `Student -> Projector -> LLM` 的闭环，你的模型不仅能做分类（Stage 2），未来甚至可以像 GPT 插件一样，直接插在 LLM 上，让 LLM 直接“看见”原始传感器数据。
-
-你的逻辑是非常前沿的（基于特征蒸馏的传感器表征学习），建议重点优化 **Masking 策略** 和 **特征对齐的 Loss 函数**。
-
-
-
-'''
-
-# 禁用 fused attention，避免 _efficient_attention_backward invalid argument
-torch.backends.cuda.enable_flash_sdp(False)
-torch.backends.cuda.enable_mem_efficient_sdp(False)
-torch.backends.cuda.enable_math_sdp(True)
-try:
-    import yaml
-except Exception:
-    yaml = None
-
-# models/SensorLLMResampler.py (Route A - Scientific MAE)
-import os
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from typing import Any, Dict, List, Optional, Tuple
-from transformers import AutoTokenizer, AutoModelForCausalLM
-
-# 禁用 fused attention 以兼容性优先
-torch.backends.cuda.enable_flash_sdp(False)
-torch.backends.cuda.enable_mem_efficient_sdp(False)
-torch.backends.cuda.enable_math_sdp(True)
-
-try:
-    import yaml
-except Exception:
-    yaml = None
+from models_new_version_run.LLMTeacher import (
+    PrimitiveLLMTeacherCore,
+    pad_to_multiple,
+    extract_codebook,
+    load_codebook_from_path_or_vq,
+)
 
 
 # ============================================================
-# 1. Scientific Components (Tokenizer, Resampler, Decoder)
+# Student Encoder
 # ============================================================
-PRETRAIN_trainable_modules="patch_embed,resampler,mae_decoder"
-TRAIN_trainable_modules="patch_embed,resampler,llm_proj,cls_head"
-
-import os
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from typing import List, Tuple, Dict, Any, Optional
-from dataclasses import dataclass
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import yaml
-
-
-# ==========================================
-# 1. 辅助类与函数
-# ==========================================
-
-@dataclass
-class TeacherOut:
-    probs: torch.Tensor  # [B, K] Teacher对mask位置的预测分布
-    valid: torch.Tensor  # [B] 标记该样本是否成功生成了guidance
-
-
-def ids_to_special_tokens(token_ids: torch.Tensor, K: int) -> List[List[str]]:
-    """
-    将 Token ID 矩阵转换为字符串列表
-    Example: [[1, 512, 2], ...] -> [["<P001>", "<PMASK>", "<P002>"], ...]
-    假设 512 (或 K) 是 mask token 的 id
-    """
-    B, T = token_ids.shape
-    batch_tokens = []
-    mask_token_id = K  # 假设 Mask Token ID 是 K
-
-    for b in range(B):
-        seq = []
-        for t in range(T):
-            tid = token_ids[b, t].item()
-            if tid == mask_token_id:
-                seq.append("<PMASK>")
-            else:
-                seq.append(f"<P{tid:03d}>")
-        batch_tokens.append(seq)
-    return batch_tokens
-
-
-# ==========================================
-# 2. Primitive LLM Teacher (冻结的大模型)
-# ==========================================
-
-class PrimitiveLLMTeacher(nn.Module):
-    """
-    Frozen causal LLM teacher.
-    It takes a sequence with <PMASK> and predicts the probability distribution
-    of the primitive tokens {<P000>..<P{K-1}>} at the mask position.
-    """
-
-    def __init__(self, llm_name_or_path: str, K: int, device: torch.device, max_len: int = 512):
-        super().__init__()
-        self.K = int(K)
-        self.device = device
-        self.max_len = int(max_len)
-
-        print(f"[Teacher] Loading LLM from {llm_name_or_path}...")
-        self.tokenizer = AutoTokenizer.from_pretrained(llm_name_or_path, use_fast=False)
-
-        # 确保有 pad_token
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-
-        # 1. 添加 Special Tokens: <P000>...<P511> 和 <PMASK>
-        # 格式化为 3位数字，例如 <P005>
-        prim_tokens = [f"<P{i:03d}>" for i in range(self.K)] + ["<PMASK>"]
-        num_added = self.tokenizer.add_special_tokens({"additional_special_tokens": prim_tokens})
-
-        # 2. 加载模型
-        self.llm = AutoModelForCausalLM.from_pretrained(llm_name_or_path)
-        if num_added > 0:
-            self.llm.resize_token_embeddings(len(self.tokenizer))
-
-        # 3. 冻结并移至设备
-        self.llm.to(device).eval()
-        for p in self.llm.parameters():
-            p.requires_grad = False
-
-        # 4. 预缓存 primitive token ids，用于从 logits 中提取
-        # 注意：这里我们只关心 <P000> 到 <PK-1> 的 ID
-        prim_ids_list = [self.tokenizer.convert_tokens_to_ids(f"<P{i:03d}>") for i in range(self.K)]
-        self.register_buffer("prim_token_ids", torch.tensor(prim_ids_list, dtype=torch.long))
-
-    def build_prompts(self, masked_ids: torch.Tensor) -> List[str]:
-        """
-        根据 masked_ids 构建 LLM 的 Prompt。
-        masked_ids: [B, T], 其中 mask 的位置值为 self.K
-        """
-        prompts = []
-        token_strs = ids_to_special_tokens(masked_ids, self.K)  # [B, List[str]]
-
-        for b_idx, seq_tokens in enumerate(token_strs):
-            seq_str = " ".join(seq_tokens)
-            # 构建 Prompt。这里你可以根据论文需求调整 Prompt Engineering
-            prompt = (
-                "You are an expert in sensor activity analysis.\n"
-                f"Sequence: {seq_str}\n"
-                "Task: Predict the sensor token that should replace <PMASK>.\n"
-                "Answer:"
-            )
-            prompts.append(prompt)
-        return prompts
-
-    def forward(self, masked_ids: torch.Tensor) -> TeacherOut:
-        """
-        Args:
-            masked_ids: [B, T] 包含 mask 的 token 序列
-        Returns:
-            TeacherOut: 包含每个样本针对 <PMASK> 的预测分布
-        """
-        prompts = self.build_prompts(masked_ids)
-
-        # Tokenize
-        enc = self.tokenizer(
-            prompts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=self.max_len
-        ).to(self.device)
-
-        # Inference
-        with torch.no_grad():
-            out = self.llm(**enc)
-            # 取最后一个 token 的 logits (假设 LLM 紧接着 prompt 预测 mask 的内容)
-            # 注意：对于 Causal LM，通常是取 prompt 最后一个 token 对应的输出作为 next token prediction
-            logits = out.logits[:, -1, :]  # [B, VocabSize]
-
-        # 提取 Primitive Tokens 的 logits
-        # self.prim_token_ids 是 [K]
-        # prim_logits: [B, K]
-        prim_logits = logits.index_select(dim=-1, index=self.prim_token_ids)
-
-        # 转换为概率分布 (Temperature 可以控制分布平滑度)
-        probs = torch.softmax(prim_logits, dim=-1)
-
-        # 标记 Valid (这里简单全部视为有效，实际可根据逻辑过滤)
-        valid = torch.ones(masked_ids.size(0), dtype=torch.bool, device=self.device)
-
-        return TeacherOut(probs=probs, valid=valid)
-
-
-# ==============================================================================
-# Part 4: SoftLlamaTeacher (Simplified for integration)
-# ==============================================================================
-
-class StudentTransformer(nn.Module):
-    """
-    轻量级的 Transformer，用于学习 mask 补全任务。
-    最后部署时只保留这个。
-    """
-
-    def __init__(self,codebook_weights , num_tokens, dim_model=256, nhead=4, num_layers=4, max_len=512):
-        super().__init__()
-        # codebook_weight = vq_net.quantizer.embedding.weight.data.clone()
-
-        # 假设 saved_codebook 是 [K, vq_dim]
-        # codebook_weights = torch.load(code_path, map_location="cpu")
-        # 根据你的保存格式，可能是 ckpt['embedding'] 或直接是 ckpt
-        # codebook_weights = ckpt['model']['quantizer.embedding.weight']  # 举例，需根据实际情况调整
-        # num_codes, code_dim = codebook_weights.shape
-        # +1 用于 Mask Token
-        self.embedding = nn.Embedding(num_tokens+1, dim_model)
-
-        # 1. 创建一个新的权重矩阵，包含 mask token
-        # 我们用xavier_normal或者zeros初始化它，作为起步
-        new_weight = torch.empty(num_tokens + 1, dim_model)
-        nn.init.xavier_normal_(new_weight)
-
-        # 2. 把前 512 个位置替换成 codebook 的权重
-        # 注意：前提是 dim_model 必须等于 codebook 的 dim
-        new_weight[:num_tokens] = codebook_weights
-
-        # 3. 第 513 个位置 (index 512) 是 Mask Token，保留随机初始化让它去学
-        # self.mask_token_id = num_tokens
-
-        # 4. 赋值给 Embedding 层
-        self.embedding.weight.data.copy_(new_weight)
-        #
-        # # 选项：你可以选择是否冻结它 (False = 允许微调，True = 锁死)
-        # self.embedding.weight.requires_grad = True
-
-        self.pos_encoder = nn.Parameter(torch.randn(1, max_len, dim_model) * 0.02)
-
-        encoder_layer = nn.TransformerEncoderLayer(d_model=dim_model, nhead=nhead, dim_feedforward=dim_model * 4,
-                                                   batch_first=True)
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-
-        self.head = nn.Linear(dim_model, num_tokens)  # 输出 K 个类别的 logits
-
-    def forward(self, x):
-        # x: [B, T]
-        B, T = x.shape
-        # Add Positional Encoding
-        emb = self.embedding(x) + self.pos_encoder[:, :T, :]
-        feat = self.transformer(emb)
-        logits = self.head(feat)  # [B, T, K]
-        return logits, feat
-
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import os
-import yaml
-import numpy as np
-from typing import Dict, Any, Optional
-
-# 尝试导入 Transformers，如果不存在则禁用 Teacher
-try:
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    HAS_TRANSFORMERS = True
-except ImportError:
-    HAS_TRANSFORMERS = False
-    print("Warning: 'transformers' library not found. LLM Teacher will be disabled.")
-
-
-# ==============================================================================
-# Part 1: Helper Functions (Padding & Loss)
-# ==============================================================================
-
-def _pad_to_multiple(x: torch.Tensor, multiple: int, pad_value: float = 0.0):
-    """
-    将时间序列 Pad 到 multiple 的倍数
-    Input: [B, L, C]
-    Output: [B, L_pad, C], L_orig
-    """
-    B, L, C = x.shape
-    L_pad = ((L + multiple - 1) // multiple) * multiple
-    if L_pad == L:
-        return x, L
-    pad_len = L_pad - L
-    pad = x.new_full((B, pad_len, C), pad_value)
-    return torch.cat([x, pad], dim=1), L
-
-
-# ==============================================================================
-# Part 2: Teacher 1 - Soft Llama (LLM)
-# ==============================================================================
-class SoftLlamaTeacher(nn.Module):
-    def __init__(self, llm_path, adapter_path,codebook_weights, mask_token_id, device):
-        super().__init__()
-        self.device = device
-        self.mask_token_id = mask_token_id
-
-        print(f"[Teacher] Loading Llama from {llm_path}...")
-        self.llm = AutoModelForCausalLM.from_pretrained(
-            llm_path, torch_dtype=torch.float16, trust_remote_code=True
-        ).to(device).eval()
-        self.tokenizer = AutoTokenizer.from_pretrained(llm_path)
-        for p in self.llm.parameters(): p.requires_grad = False
-
-        self.llm_dim = self.llm.config.hidden_size
-        self.register_buffer("codebook", codebook_weights.to(device))
-        self.num_vq_codes = self.codebook.shape[0]
-        self.vq_dim = self.codebook.shape[1]
-
-        self.projector = nn.Linear(self.vq_dim, self.llm_dim).to(device)
-        self.mask_embed_llama = nn.Parameter(torch.randn(1, 1, self.llm_dim).to(device))
-        self.output_head = nn.Linear(self.llm_dim, self.num_vq_codes).to(device)
-
-        self.system_prompt = "Analyze sensor sequence:"
-        self.prompt_input_ids = self.tokenizer(self.system_prompt, return_tensors="pt").input_ids.to(device)
-        with torch.no_grad():
-            self.prompt_embeds = self.llm.get_input_embeddings()(self.prompt_input_ids)
-        # === 新增：加载对齐后的权重 ===
-        if adapter_path is not None and os.path.exists(adapter_path):
-            print(f"[Teacher] Loading Aligned Adapters from {adapter_path}")
-            checkpoint = torch.load(adapter_path, map_location=device)
-
-            # 加载 projector
-            self.projector.load_state_dict(checkpoint['projector'])
-
-            # 加载 output_head
-            self.output_head.load_state_dict(checkpoint['output_head'])
-
-            # 极其重要：加载后冻结它们！
-            # 在蒸馏阶段，Teacher 应该是全冻结的（包括 Adapter）
-            # 除非你想在蒸馏时继续微调 Teacher (通常不建议)
-            for p in self.projector.parameters(): p.requires_grad = False
-            for p in self.output_head.parameters(): p.requires_grad = False
-        else:
-            print("[Teacher] WARNING: No adapter weights loaded! Initializing randomly (BAD for Distillation).")
-
-    def forward(self, masked_ids):
-        B, T = masked_ids.shape
-        is_mask = (masked_ids == self.mask_token_id)
-
-        safe_ids = masked_ids.clone()
-        safe_ids[is_mask] = 0
-        safe_ids = safe_ids.clamp(0, self.num_vq_codes - 1)
-
-        vq_embeds = F.embedding(safe_ids, self.codebook)
-        sensor_embeds = self.projector(vq_embeds)
-
-        expanded_mask = self.mask_embed_llama.expand(B, T, -1)
-        mask_broadcast = is_mask.unsqueeze(-1).float()
-        final_sensor_embeds = sensor_embeds * (1 - mask_broadcast) + expanded_mask * mask_broadcast
-
-        batch_prompt = self.prompt_embeds.expand(B, -1, -1)
-        inputs_embeds = torch.cat([batch_prompt, final_sensor_embeds], dim=1).to(self.llm.dtype)
-
-        outputs = self.llm(inputs_embeds=inputs_embeds, output_hidden_states=True)
-        last_hidden = outputs.hidden_states[-1]
-
-        L_text = batch_prompt.shape[1]
-        sensor_features = last_hidden[:, L_text:, :]
-
-        logits = self.output_head(sensor_features.to(torch.float32))
-        probs = F.softmax(logits, dim=-1)
-
-        class TeacherOut:
-            def __init__(self, probs): self.probs = probs
-
-        return TeacherOut(probs)
-
-
-# ==============================================================================
-# Part 3: Student Components (Conv Patch Embedding + Transformer)
-# ==============================================================================
 class PatchEmbeddingConv(nn.Module):
     """
-    使用卷积提取局部时序特征，并保证输出长度对齐
+    Convolutional patch embedding for IMU sequences.
+
+    Input:
+        x: [B, L_pad, C]
+
+    Output:
+        h: [B, P, D]
     """
 
-    def __init__(self, seq_len_pad: int, patch_len: int, in_channels: int, embed_dim: int):
+    def __init__(
+        self,
+        seq_len_pad: int,
+        patch_len: int,
+        in_channels: int,
+        embed_dim: int,
+    ):
         super().__init__()
-        # 这里的 seq_len_pad 应该是已经 Pad 过的总长度
-        self.seq_len = seq_len_pad
-        self.patch_len = patch_len
-        self.num_patches = seq_len_pad // patch_len
-        self.embed_dim = embed_dim
 
-        # Conv stem
+        self.seq_len = int(seq_len_pad)
+        self.patch_len = int(patch_len)
+        self.num_patches = self.seq_len // self.patch_len
+        self.embed_dim = int(embed_dim)
+
+        if self.seq_len % self.patch_len != 0:
+            raise ValueError(
+                f"seq_len_pad must be divisible by patch_len, got "
+                f"seq_len_pad={self.seq_len}, patch_len={self.patch_len}"
+            )
+
         self.stem = nn.Sequential(
             nn.Conv1d(in_channels, embed_dim // 2, kernel_size=5, padding=2),
             nn.GELU(),
@@ -494,8 +61,7 @@ class PatchEmbeddingConv(nn.Module):
             nn.GELU(),
         )
 
-        # Patch projection
-        self.proj = nn.Linear(patch_len * embed_dim, embed_dim)
+        self.proj = nn.Linear(self.patch_len * embed_dim, embed_dim)
         self.norm = nn.LayerNorm(embed_dim)
 
         self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -504,573 +70,641 @@ class PatchEmbeddingConv(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, embed_dim))
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
 
-    def forward(self, x: torch.Tensor, mask_bool: torch.Tensor = None) -> torch.Tensor:
-        # x: [B, L_pad, C]
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask_bool: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         B, L, C = x.shape
 
-        # 1. Conv Stem
-        h = self.stem(x.transpose(1, 2)).transpose(1, 2)  # [B, L, D]
+        if L != self.seq_len:
+            raise ValueError(f"Expected L={self.seq_len}, but got L={L}.")
 
-        # 2. Patchify
-        # [B, L, D] -> [B, P, patch_len, D]
-        h = torch.reshape(h,(B, self.num_patches, self.patch_len, self.embed_dim))
-        # Flatten patches: [B, P, patch_len*D]
+        # [B, L, C] -> [B, C, L] -> [B, D, L] -> [B, L, D]
+        h = self.stem(x.transpose(1, 2)).transpose(1, 2)
 
-        h = torch.reshape(h,(B, self.num_patches, self.patch_len * self.embed_dim))
+        # [B, L, D] -> [B, P, patch_len * D]
+        h = h.reshape(B, self.num_patches, self.patch_len, self.embed_dim)
+        h = h.reshape(B, self.num_patches, self.patch_len * self.embed_dim)
 
-        # 3. Project
-        h = self.proj(h)  # [B, P, D]
+        h = self.proj(h)
         h = self.norm(h)
         h = h + self.pos_embed
 
-        # 4. Masking
         if mask_bool is not None:
+            if mask_bool.shape != (B, self.num_patches):
+                raise ValueError(
+                    f"mask_bool shape should be {(B, self.num_patches)}, "
+                    f"got {tuple(mask_bool.shape)}"
+                )
+
             w = mask_bool.unsqueeze(-1).type_as(h)
             mask_tokens = self.mask_token.expand(B, self.num_patches, self.embed_dim)
-            h = h * (1 - w) + mask_tokens * w
+
+            h = h * (1.0 - w) + mask_tokens * w
 
         return h
 
 
 class StrongStudent(nn.Module):
-    def __init__(self, seq_len_pad, patch_len, in_channels, dim_model, num_vq_codes, nhead=4, num_layers=4):
+    """
+    Student encoder for primitive prediction and downstream classification.
+    """
+
+    def __init__(
+        self,
+        seq_len_pad: int,
+        patch_len: int,
+        in_channels: int,
+        dim_model: int,
+        num_vq_codes: int,
+        nhead: int = 4,
+        num_layers: int = 4,
+        dropout: float = 0.1,
+    ):
         super().__init__()
+
         self.patch_embed = PatchEmbeddingConv(
             seq_len_pad=seq_len_pad,
             patch_len=patch_len,
             in_channels=in_channels,
-            embed_dim=dim_model
+            embed_dim=dim_model,
         )
 
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=dim_model, nhead=nhead, dim_feedforward=dim_model * 4,
-            batch_first=True, norm_first=True
+            d_model=dim_model,
+            nhead=nhead,
+            dim_feedforward=dim_model * 4,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=num_layers,
+        )
+
         self.vocab_head = nn.Linear(dim_model, num_vq_codes)
 
-    def forward(self, x, mask_bool=None):
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask_bool: Optional[torch.Tensor] = None,
+    ):
         emb = self.patch_embed(x, mask_bool)
         feat = self.transformer(emb)
         logits = self.vocab_head(feat)
+
         return logits, feat
 
 
-# ==============================================================================
-# Part 4: Main Model (Fixed Logic)
-# ==============================================================================
+# ============================================================
+# Main Model
+# ============================================================
 class Model(nn.Module):
+    """
+    ReasonHAR model.
+
+    Stage 1:
+        - Frozen VQ-VAE generates discrete primitive targets.
+        - Student predicts masked primitives.
+        - Optional frozen LLM teacher provides soft primitive distributions.
+
+    Stage 2:
+        - Teacher is removed.
+        - Student encoder + attention pooling + classifier are used for HAR.
+    """
+
     def __init__(self, args):
         super().__init__()
+
         self.args = args
         self.stage = int(getattr(args, "stage", 1))
         self.device = args.device
 
         print(f"[Model] Init in Stage: {self.stage}")
 
-        # 1. 解析 Stage
-        self.stage = int(getattr(args, "stage", 1))
-        print(f"init Model in Stage: {self.stage}")
-        # -------- dataset cfg load --------
-        self.dataset_key = str(getattr(args, "dataset_key", getattr(args, "data", "mhealth"))).lower()
+        # ============================================================
+        # Dataset config
+        # ============================================================
+        self.dataset_key = str(
+            getattr(args, "dataset_key", getattr(args, "data", "mhealth"))
+        ).lower()
+
         self.ds_cfg: Dict[str, Any] = {}
+
         if hasattr(args, "ds_cfg") and isinstance(args.ds_cfg, dict):
             self.ds_cfg = args.ds_cfg
         else:
             ts_yaml = getattr(args, "ts_backbone_yaml", None)
+
             if ts_yaml is not None:
                 if yaml is None:
-                    raise ImportError("pyyaml not installed but ts_backbone_yaml is set.")
-                if not os.path.exists(ts_yaml):
-                    raise FileNotFoundError(ts_yaml)
-                with open(ts_yaml, "r", encoding="utf-8") as f:
+                    raise ImportError("pyyaml is not installed but ts_backbone_yaml is set.")
+
+                if os.path.exists(ts_yaml):
+                    config_path = ts_yaml
+                else:
+                    project_path = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+                    config_path = os.path.join(project_path, "configs", ts_yaml)
+
+                if not os.path.exists(config_path):
+                    raise FileNotFoundError(f"ts_backbone_yaml not found: {config_path}")
+
+                with open(config_path, "r", encoding="utf-8") as f:
                     cfg_all = yaml.safe_load(f)
+
                 if self.dataset_key not in cfg_all:
-                    raise KeyError(f"{self.dataset_key} not in {ts_yaml}")
+                    raise KeyError(f"{self.dataset_key} not found in {config_path}")
+
                 self.ds_cfg = cfg_all[self.dataset_key]
-        self.device = args.device
+
         self.C = int(self.ds_cfg.get("channel_num", getattr(args, "enc_in", 15)))
         self.num_class = int(self.ds_cfg.get("num_labels", getattr(args, "num_class", 12)))
+        self.seq_len_orig = int(getattr(args, "seq_len", 200))
 
-        self.seq_len_orig = int(getattr(args, "seq_len", 200))  # 原始数据长度
-
+        # ============================================================
+        # VQ-VAE loading
+        # ============================================================
         self.vq_net = IMU_VQ_Model(args)
 
-        vqvae_path = getattr(args, "vqvae_path", None)
-        self.qua_path = self.ds_cfg.get(vqvae_path, None)
+        vqvae_key = getattr(args, "vqvae_path", None)
+        self.qua_path = None
 
-        if self.qua_path is not None:
-            vq_net_state_dict = torch.load(self.qua_path + os.sep + "best_wrapper.pth", map_location='cpu')
-            if 'state_dict' in vq_net_state_dict:
-                vq_net_state_dict = vq_net_state_dict['state_dict']
-            self.vq_net.load_state_dict(vq_net_state_dict, strict=True)
-            self.vq_net.eval()  # Set the model to evaluation mode
+        if vqvae_key is not None:
+            self.qua_path = self.ds_cfg.get(vqvae_key, None)
 
-            # set vq net requires_grad to False
-            for param in self.vq_net.parameters():
-                param.requires_grad = False
-            # --------------------------------------------
-        # --- 2. Calculate Alignment (Critical) ---
-        # VQ Stride = stride_t ^ down_t (e.g., 2^3 = 8)
-        self.vq_stride = self.vq_net.stride_t ** self.vq_net.down_t
-        self.patch_len = self.vq_stride  # Student Patch MUST match VQ Stride
+        if self.qua_path is None:
+            self.qua_path = getattr(args, "vqvae_ckpt_dir", None)
 
-        # Calculate Padded Length
-        # e.g., if L=195, Stride=8 -> L_pad=200
-        self.seq_len_pad = ((self.seq_len_orig + self.vq_stride - 1) // self.vq_stride) * self.vq_stride
+        if self.qua_path is None:
+            raise ValueError(
+                "VQ-VAE checkpoint directory is not provided. "
+                "Set args.vqvae_path as a key in ds_cfg, or set args.vqvae_ckpt_dir."
+            )
+
+        vq_ckpt_path = os.path.join(self.qua_path, "best_wrapper.pth")
+
+        if not os.path.exists(vq_ckpt_path):
+            raise FileNotFoundError(f"VQ-VAE checkpoint not found: {vq_ckpt_path}")
+
+        print(f"[Model] Loading VQ-VAE from: {vq_ckpt_path}")
+
+        vq_state = torch.load(vq_ckpt_path, map_location="cpu")
+
+        if isinstance(vq_state, dict) and "state_dict" in vq_state:
+            vq_state = vq_state["state_dict"]
+
+        self.vq_net.load_state_dict(vq_state, strict=True)
+        self.vq_net.eval()
+
+        for p in self.vq_net.parameters():
+            p.requires_grad = False
+
+        # ============================================================
+        # VQ-token / patch alignment
+        # ============================================================
+        self.vq_stride = int(self.vq_net.stride_t ** self.vq_net.down_t)
+        self.patch_len = self.vq_stride
+
+        self.seq_len_pad = (
+            (self.seq_len_orig + self.vq_stride - 1) // self.vq_stride
+        ) * self.vq_stride
+
         self.P = self.seq_len_pad // self.patch_len
 
         print(
-            f"[Model Alignment] Orig={self.seq_len_orig}, Stride={self.vq_stride} -> Padded={self.seq_len_pad}, Patches(P)={self.P}")
+            f"[Model Alignment] Orig={self.seq_len_orig}, "
+            f"Stride={self.vq_stride} -> Padded={self.seq_len_pad}, Patches={self.P}"
+        )
 
-        # --- 3. Initialize Student ---
-        self.num_primitives = self.vq_net.code_num
+        self.num_primitives = int(
+            getattr(self.vq_net, "code_num", None) or getattr(self.vq_net, "num_code", None)
+        )
+
+        if self.num_primitives <= 0:
+            raise ValueError(f"Invalid num_primitives={self.num_primitives}")
+
         self.mask_token_id = self.num_primitives
+
+        # ============================================================
+        # Student
+        # ============================================================
         self.dim_student = int(getattr(args, "dim_student", 256))
+        self.student_nhead = int(getattr(args, "student_nhead", 4))
+        self.student_num_layers = int(getattr(args, "student_num_layers", 4))
+        self.student_dropout = float(getattr(args, "student_dropout", 0.1))
 
         self.student = StrongStudent(
-            seq_len_pad=self.seq_len_pad,  # Pass Padded Length
+            seq_len_pad=self.seq_len_pad,
             patch_len=self.patch_len,
             in_channels=self.C,
             dim_model=self.dim_student,
             num_vq_codes=self.num_primitives,
-            nhead=4,
-            num_layers=4
+            nhead=self.student_nhead,
+            num_layers=self.student_num_layers,
+            dropout=self.student_dropout,
         ).to(self.device)
-        self.mask_rate=args.mask_rate
-        # --- 4. Initialize Teacher 2 (SoftLlama) ---
-        self.lambda_distill = float(getattr(args, "lambda_distill", 1))
+
+        self.mask_rate = float(getattr(args, "mask_rate", 0.4))
+        self.lambda_distill = float(getattr(args, "lambda_distill", 0.0))
+
+        if self.mask_rate < 0 or self.mask_rate > 1:
+            raise ValueError(f"mask_rate should be in [0, 1], got {self.mask_rate}")
+
+        # ============================================================
+        # Optional LLM teacher for Stage 1
+        # ============================================================
         self.teacher = None
 
-        if self.stage == 1 and hasattr(args, 'llama_name'):
-            # Load Codebook safely
-            if hasattr(self, 'qua_path') and self.qua_path:
-                cb_path = self.qua_path + os.sep + "best_codebook.pth"
-                if os.path.exists(cb_path):
-                    codebook_weights = torch.load(cb_path, map_location="cpu")
-                else:
-                    codebook_weights = self.vq_net.quantizer.codebook.data.cpu()
-            else:
-                codebook_weights = self.vq_net.quantizer.codebook.data.cpu()
+        if self.stage == 1 and self.lambda_distill > 0:
+            if not hasattr(args, "llama_name") or args.llama_name is None:
+                raise ValueError("args.llama_name is required when lambda_distill > 0.")
+
+            codebook_weights = load_codebook_from_path_or_vq(
+                vq_net=self.vq_net,
+                ckpt_dir=self.qua_path,
+                device=self.device,
+            )
+
+            if codebook_weights.shape[0] != self.num_primitives:
+                raise ValueError(
+                    f"Codebook size mismatch: codebook K={codebook_weights.shape[0]}, "
+                    f"vq_net num_primitives={self.num_primitives}. "
+                    "Please check whether best_codebook.pth matches best_wrapper.pth."
+                )
+
             alignment_path = self.ds_cfg.get("alignment_path", None)
-            adapter_path = alignment_path+ os.sep + "best_wrapper.pth"
-            adapter_path = None
-            self.teacher = SoftLlamaTeacher(
+            adapter_path = getattr(args, "teacher_adapter_path", None)
+
+            if adapter_path is None and alignment_path is not None:
+                candidate = os.path.join(alignment_path, "best_wrapper.pth")
+                if os.path.exists(candidate):
+                    adapter_path = candidate
+
+            allow_random_teacher = bool(getattr(args, "allow_random_teacher", False))
+
+            if adapter_path is None and not allow_random_teacher:
+                raise FileNotFoundError(
+                    "Teacher adapter is required when lambda_distill > 0. "
+                    "Set args.teacher_adapter_path or ds_cfg['alignment_path']/best_wrapper.pth. "
+                    "For CE-only pretraining, set lambda_distill=0."
+                )
+
+            self.teacher = PrimitiveLLMTeacherCore(
                 llm_path=args.llama_name,
-                adapter_path=adapter_path,
                 codebook_weights=codebook_weights,
                 mask_token_id=self.mask_token_id,
-                device=self.device
+                max_patches=self.P,
+                device=self.device,
+                temperature=float(getattr(args, "distill_temperature", 1.0)),
+                system_prompt=str(
+                    getattr(args, "teacher_prompt", "Recover masked sensor primitives:")
+                ),
             )
 
-        # --- 5. Classifier (Stage 2) ---
+            if adapter_path is not None and os.path.exists(adapter_path):
+                load_info = self.teacher.load_adapter(adapter_path, strict=True)
+                print(f"[Model] Loaded teacher adapter from: {adapter_path}")
+                print(f"[Model] teacher load info: {load_info}")
+            elif allow_random_teacher:
+                print("[Model][WARNING] Using randomly initialized teacher adapter.")
+            else:
+                raise FileNotFoundError(f"Teacher adapter not found: {adapter_path}")
+
+            self.teacher.freeze_all()
+
+        # ============================================================
+        # Stage 2 classification head
+        # ============================================================
         if self.stage == 2:
-            self.classifier = nn.Sequential(
-                nn.Linear(self.dim_student, self.dim_student),
-                nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(self.dim_student, self.num_class)
+            self.pool_query = nn.Parameter(
+                torch.randn(1, 1, self.dim_student) * 0.02
             )
 
-    def _load_vq_weights(self, args):
-        vqvae_path = getattr(args, "vqvae_path", None)
-        if hasattr(self, 'ds_cfg'):
-            self.qua_path = self.ds_cfg.get(vqvae_path, None)
-        if hasattr(self, 'qua_path') and self.qua_path:
-            # Load logic specific to your checkpoint format
-            # ckpt = torch.load(...)
-            # self.vq_net.load_state_dict(...)
-            print(f"[Model] Loading VQ Weights from {self.qua_path} (Simulated)")
-            pass
+            self.pool_attn = nn.MultiheadAttention(
+                embed_dim=self.dim_student,
+                num_heads=self.student_nhead,
+                dropout=self.student_dropout,
+                batch_first=True,
+            )
 
-    def random_masking(self, B, P, mask_ratio):
-        noise = torch.rand(B, P, device=self.device)
-        return noise < mask_ratio
+            self.classifier = nn.Sequential(
+                nn.LayerNorm(self.dim_student),
+                nn.Linear(self.dim_student, self.dim_student),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(self.dim_student, self.num_class),
+            )
 
-    def get_mask(self, B, P, mask_ratio, mode="random"):
-        if mode == "random":
-            return torch.rand(B, P, device=self.device) < mask_ratio
-
-        elif mode == "block":
-            # 模式 2: Block Mask (连续片段掩码)
-            mask = torch.zeros((B, P), device=self.device, dtype=torch.bool)
-            block_len = max(1, int(P * mask_ratio))  # 掩码长度
-            for i in range(B):
-                start = torch.randint(0, P - block_len + 1, (1,))
-                mask[i, start: start + block_len] = True
-            return mask
-
-        elif mode == "channel":
-            # 模式 3: Channel Mask (在数据输入层模拟，此处返回全 False，但在输入端置零)
-            # 注意：Channel Mask 需要在 forward 最开始对 x_imu 操作
-            return torch.zeros((B, P), device=self.device, dtype=torch.bool)
-
-    def get_mask(self, B, P, mask_ratio, mode="random", channel_mask=None):
+    # ============================================================
+    # Masking
+    # ============================================================
+    def get_mask(
+        self,
+        B: int,
+        P: int,
+        mask_ratio: float,
+        mode: str = "random",
+    ) -> torch.Tensor:
         """
-        返回 token-level mask: [B, P], True 表示该 token 被 mask
-        channel_mask: [B, C]，True 表示该 channel 被 mask（仅 channel mode 使用）
+        Return token-level mask [B, P].
+        True means masked.
         """
+        mode = str(mode).lower()
 
         if mode == "random":
             return torch.rand(B, P, device=self.device) < mask_ratio
 
-        elif mode == "block":
+        if mode == "block":
             mask = torch.zeros((B, P), device=self.device, dtype=torch.bool)
+
             block_len = max(1, int(P * mask_ratio))
+            block_len = min(block_len, P)
+
             for i in range(B):
-                start = torch.randint(0, P - block_len + 1, (1,), device=self.device)
+                start = torch.randint(0, P - block_len + 1, (1,), device=self.device).item()
                 mask[i, start:start + block_len] = True
+
             return mask
 
-        elif mode == "channel":
-            assert channel_mask is not None, "channel_mask must be provided for channel mode"
-            # 👉 channel mask ⇒ 所有 token 位置都 mask
-            # 因为整个序列在这些通道上语义不可观测
-            # token-level mask = True if ANY channel is dropped
-            # （这是保守但 reviewer-safe 的定义）
-            mask = channel_mask.any(dim=1, keepdim=True)  # [B, 1]
-            return mask.expand(B, P)
+        raise ValueError(
+            f"Unknown mask_mode={mode}. "
+            "Use 'random' for main experiments or 'block' for ablation. "
+            "Do not use channel masking in Stage 1 because it corrupts VQ targets."
+        )
 
-        else:
-            raise ValueError(f"Unknown mask mode: {mode}")
+    def _build_loss_valid_mask(self, B: int, L_orig: int) -> torch.Tensor:
+        valid_patches = (L_orig + self.patch_len - 1) // self.patch_len
+        valid_patches = min(valid_patches, self.P)
+
+        loss_valid_mask = torch.zeros((B, self.P), device=self.device, dtype=torch.bool)
+        loss_valid_mask[:, :valid_patches] = True
+
+        return loss_valid_mask
+
+    def _ensure_at_least_one_masked_valid(
+        self,
+        mask_bool: torch.Tensor,
+        valid_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        final_mask = mask_bool & valid_mask
+
+        if final_mask.sum() == 0:
+            B = mask_bool.shape[0]
+            for b in range(B):
+                valid_idx = torch.where(valid_mask[b])[0]
+                if valid_idx.numel() > 0:
+                    mask_bool[b, valid_idx[0]] = True
+
+        return mask_bool
+
+    # ============================================================
+    # Forward
+    # ============================================================
     def forward(self, x_imu, padding_mask=None, mode=None, labels=None):
         if mode is None:
             mode = "pretrain" if self.stage == 1 else "classify"
 
-        if not torch.is_tensor(x_imu): x_imu = torch.as_tensor(x_imu)
+        if not torch.is_tensor(x_imu):
+            x_imu = torch.as_tensor(x_imu)
+
+        x_imu = x_imu.to(self.device).float()
+
         B, L_orig, C = x_imu.shape
-        mask_mode = getattr(self.args, "mask_mode", "random")
 
-        if mask_mode == "channel":
-            C = x_imu.shape[-1]
-            num_drop = max(1, int(C * self.mask_rate))
+        if C != self.C:
+            raise ValueError(f"Input channel C={C}, but model expects C={self.C}.")
 
-            channel_mask = torch.zeros(
-                (B, C), device=x_imu.device, dtype=torch.bool
-            )
+        # Optional instance normalization.
+        # Use only if VQ-VAE was trained with the same normalization.
+        if bool(getattr(self.args, "use_instance_norm", False)):
+            eps = float(getattr(self.args, "norm_eps", 1e-5))
+            mu = x_imu.mean(dim=1, keepdim=True)
+            sigma = x_imu.std(dim=1, keepdim=True).clamp_min(eps)
+            x_imu = (x_imu - mu) / sigma
 
-            for b in range(B):
-                drop_idx = torch.randperm(C, device=x_imu.device)[:num_drop]
-                channel_mask[b, drop_idx] = True
+        x_pad, _ = pad_to_multiple(x_imu, self.vq_stride, pad_value=0.0)
 
-            # 学生端：被 mask 的 channel 全序列置零
-            x_imu = x_imu.clone()
-            x_imu[channel_mask.unsqueeze(1).expand_as(x_imu)] = 0.0
-        else:
-            channel_mask = None
-        # ===========================================================
-        # Step 0: 统一 Padding (关键!)
-        # 1. Pad 输入数据到 VQ Stride 的倍数
-        # ===========================================================
-        x_pad, L_pad = _pad_to_multiple(x_imu, self.vq_stride, pad_value=0.0)
-        # x_pad: [B, seq_len_pad, C]
+        if x_pad.shape[1] != self.seq_len_pad:
+            if x_pad.shape[1] > self.seq_len_pad:
+                x_pad = x_pad[:, :self.seq_len_pad, :]
+            else:
+                pad_len = self.seq_len_pad - x_pad.shape[1]
+                pad = x_pad.new_zeros(B, pad_len, C)
+                x_pad = torch.cat([x_pad, pad], dim=1)
 
-        # 2. 生成 Loss Mask (用于忽略 Padding 区域的 Loss)
-        # L_orig 是原始有效长度。计算有多少个 Patch 是有效的。
-        # 例如: Orig=195, Stride=8 -> 24 个有效 Patch (24*8=192), 第 25 个 Patch 包含填充数据
-        valid_patches = L_orig // self.patch_len
-        loss_valid_mask = torch.zeros((B, self.P), device=self.device, dtype=torch.bool)
-        loss_valid_mask[:, :valid_patches] = True
+        loss_valid_mask = self._build_loss_valid_mask(B=B, L_orig=L_orig)
 
-        # ====================
-        # Stage 1: Pretrain
-        # ====================
+        # ========================================================
+        # Stage 1: masked primitive prediction + optional distill
+        # ========================================================
         if self.stage == 1:
+            mask_mode = str(getattr(self.args, "mask_mode", "random")).lower()
+
+            if mask_mode == "channel":
+                raise NotImplementedError(
+                    "Stage-1 channel masking is disabled because it corrupts VQ targets. "
+                    "Use mask_mode='random' for main distillation. "
+                    "Evaluate channel-wise missingness at test time."
+                )
+
             with torch.no_grad():
-                # VQ-VAE 的 get_token_ids 必须接收 Pad 后的数据
-                # 如果你的 VQ-VAE 内部没有自动 Pad，这里传 x_pad 是最安全的
                 gt_ids = self.vq_net.get_token_ids(x_pad)
 
-                # 安全断言：确保 VQ 输出的 Token 数与 Student 的 Patch 数对齐
             if gt_ids.shape[1] != self.P:
-                # 容错：如果 VQ 内部处理导致稍微多了点，强行截断对齐
                 if gt_ids.shape[1] > self.P:
                     gt_ids = gt_ids[:, :self.P]
                 else:
-                    raise ValueError(f"VQ Tokens {gt_ids.shape[1]} < Student Patches {self.P}")
+                    raise ValueError(f"VQ tokens {gt_ids.shape[1]} < student patches {self.P}.")
 
-            # 生成 Masking (BEiT 任务)
-            # mask_bool = self.get_mask(x_pad.size(0), self.P, self.mask_rate, mode=mask_mode)
+            gt_ids = gt_ids.to(self.device).long()
+
             mask_bool = self.get_mask(
-                B=x_pad.size(0),
+                B=B,
                 P=self.P,
                 mask_ratio=self.mask_rate,
                 mode=mask_mode,
-                channel_mask=channel_mask
             )
-            # mask_bool = self.random_masking(x_pad.size(0), self.P, 0.4)
 
-            # Student Forward
-            student_logits, _ = self.student(x_pad, mask_bool)  # [B, P, K]
+            mask_bool = self._ensure_at_least_one_masked_valid(
+                mask_bool=mask_bool,
+                valid_mask=loss_valid_mask,
+            )
 
-            # --- Calculation with Loss Mask ---
-            # 只有 (被 Mask 的位置) AND (不是 Padding 的位置) 才计算 Loss
             final_mask = mask_bool & loss_valid_mask
+
+            student_logits, _ = self.student(x_pad, mask_bool)  # [B, P, K]
 
             target_masked = gt_ids[final_mask]
             pred_masked = student_logits[final_mask]
 
             if target_masked.numel() > 0:
-                loss_recon = F.cross_entropy(pred_masked, target_masked)
-            else:
-                loss_recon = torch.tensor(0.0, device=self.device, requires_grad=True)
+                loss_prim = F.cross_entropy(pred_masked, target_masked)
 
-            # Distill Loss
+                with torch.no_grad():
+                    student_pred = pred_masked.argmax(dim=-1)
+                    mask_acc = (student_pred == target_masked).float().mean()
+            else:
+                loss_prim = torch.tensor(0.0, device=self.device, requires_grad=True)
+                mask_acc = torch.tensor(0.0, device=self.device)
+
             loss_distill = torch.tensor(0.0, device=self.device)
+            teacher_entropy = torch.tensor(0.0, device=self.device)
+            teacher_entropy_norm = torch.tensor(0.0, device=self.device)
+            teacher_acc = torch.tensor(0.0, device=self.device)
+            teacher_conf = torch.tensor(0.0, device=self.device)
+            teacher_conf_raw = torch.tensor(0.0, device=self.device)
+
             if self.teacher is not None and self.lambda_distill > 0:
                 teacher_input_ids = gt_ids.clone()
-                teacher_input_ids[mask_bool] = self.mask_token_id
 
-                teacher_out = self.teacher(teacher_input_ids)
+                # Important:
+                # Padding patches should not be treated as real teacher context.
+                teacher_input_ids[mask_bool | (~loss_valid_mask)] = self.mask_token_id
 
-                s_log_probs = F.log_softmax(student_logits[final_mask], dim=-1)
-                # t_probs = teacher_out.probs[final_mask].detach()
-                #
-                # if s_log_probs.numel() > 0:
-                #     loss_distill = F.kl_div(s_log_probs, t_probs, reduction='batchmean')
+                with torch.no_grad():
+                    teacher_out = self.teacher(teacher_input_ids)
 
-                # 在 args 中增加一个 use_hard_label 参数
-                use_hard_label = getattr(self.args, "use_hard_label", 0)
+                t_probs_temp = teacher_out.probs[final_mask].detach()
 
-                t_probs = teacher_out.probs[final_mask].detach()  # [N_masked, K]
-                if s_log_probs.numel() > 0:
-                    if not use_hard_label:
-                        # 方案 1: Soft Label (KL 散度)
-                        loss_distill = F.kl_div(s_log_probs, t_probs, reduction='batchmean')
-                    else:
-                        # 方案 2: Hard Label (教师预测的最可能 Token 作为标签)
-                        # ===== Hard Label Distillation (公平版本) =====
-                        teacher_hard_labels = torch.argmax(t_probs, dim=-1)
+                if pred_masked.numel() > 0 and t_probs_temp.numel() > 0:
+                    use_hard_label = int(getattr(self.args, "use_hard_label", 0))
+                    distill_temperature = float(getattr(self.args, "distill_temperature", 1.0))
 
-                        loss_distill = F.nll_loss(
-                            s_log_probs,
-                            teacher_hard_labels,
-                            reduction="mean"
+                    if distill_temperature <= 0:
+                        raise ValueError(
+                            f"distill_temperature must be > 0, got {distill_temperature}"
                         )
 
-            loss_total = loss_recon + self.lambda_distill * loss_distill
+                    with torch.no_grad():
+                        t_logits_raw = teacher_out.logits[final_mask].detach()
+                        t_probs_raw = F.softmax(t_logits_raw, dim=-1)
+
+                        teacher_entropy = -(
+                            t_probs_temp * (t_probs_temp + 1e-8).log()
+                        ).sum(dim=-1).mean()
+
+                        teacher_entropy_norm = teacher_entropy / torch.log(
+                            torch.tensor(float(self.num_primitives), device=self.device)
+                        )
+
+                        teacher_conf = t_probs_temp.max(dim=-1).values.mean()
+                        teacher_conf_raw = t_probs_raw.max(dim=-1).values.mean()
+
+                        teacher_pred = t_logits_raw.argmax(dim=-1)
+                        teacher_acc = (teacher_pred == target_masked).float().mean()
+
+                    if use_hard_label:
+                        teacher_hard_labels = t_logits_raw.argmax(dim=-1)
+
+                        loss_distill = F.cross_entropy(
+                            pred_masked,
+                            teacher_hard_labels,
+                            reduction="mean",
+                        )
+                    else:
+                        # Recompute both sides with the same distillation temperature.
+                        t_probs_for_kl = F.softmax(
+                            t_logits_raw / distill_temperature,
+                            dim=-1,
+                        )
+
+                        s_log_probs_for_kl = F.log_softmax(
+                            pred_masked / distill_temperature,
+                            dim=-1,
+                        )
+
+                        loss_distill = F.kl_div(
+                            s_log_probs_for_kl,
+                            t_probs_for_kl,
+                            reduction="batchmean",
+                        ) * (distill_temperature ** 2)
+
+            loss_total = loss_prim + self.lambda_distill * loss_distill
+
             return loss_total, student_logits, {
-                "loss_recon": loss_recon.item(),
-                "loss_distill": loss_distill.item(),
-                "loss_total": loss_total.item()
+                "loss_prim": float(loss_prim.detach().item()),
+                "loss_recon": float(loss_prim.detach().item()),  # backward-compatible key
+                "loss_distill": float(loss_distill.detach().item()),
+                "loss_total": float(loss_total.detach().item()),
+                "mask_acc": float(mask_acc.detach().item()),
+                "teacher_acc": float(teacher_acc.detach().item()),
+                "teacher_conf": float(teacher_conf.detach().item()),
+                "teacher_conf_raw": float(teacher_conf_raw.detach().item()),
+                "teacher_entropy": float(teacher_entropy.detach().item()),
+                "teacher_entropy_norm": float(teacher_entropy_norm.detach().item()),
             }
 
-        # ====================
-        # Stage 2: Classify
-        # ====================
-        elif self.stage == 2:
-            # Student Forward
+        # ========================================================
+        # Stage 2: classification
+        # ========================================================
+        if self.stage == 2:
             _, feat = self.student(x_pad, mask_bool=None)  # [B, P, D]
 
-            # --- Pooling with Mask ---
-            # 只对有效的 Patch 进行平均，忽略 Padding 部分
-            # feat: [B, P, D] -> [B, valid_patches, D]
-            feat_valid = feat[:, :valid_patches, :]
+            valid_patches = int(loss_valid_mask[0].sum().item())
+            valid_patches = max(1, min(valid_patches, self.P))
 
-            # Global Pooling
-            global_feat = feat_valid.mean(dim=1)  # [B, D]
+            feat_valid = feat[:, :valid_patches, :]  # [B, Pv, D]
 
-            logits = self.classifier(global_feat)  # [B, num_class]
+            query = self.pool_query.expand(B, -1, -1)  # [B, 1, D]
+            pooled, _ = self.pool_attn(query, feat_valid, feat_valid)
+
+            global_feat = pooled.squeeze(1)
+            logits = self.classifier(global_feat)
+
             return logits
 
+        raise ValueError(f"Unknown stage: {self.stage}")
+
+    # ============================================================
+    # Save / load student wrapper
+    # ============================================================
     def save_wrapper(self, path):
+        """
+        Save student and stage-related lightweight modules.
+        Exclude:
+            - frozen VQ-VAE
+            - frozen teacher
+        """
         sd = self.state_dict()
         to_save = {}
+
         for k, v in sd.items():
+            if k.startswith("vq_net.") or k.startswith("teacher."):
+                continue
             if "vq_net" in k or "teacher" in k:
                 continue
-            to_save[k] = v
+
+            to_save[k] = v.detach().cpu()
+
         if os.path.dirname(path):
             os.makedirs(os.path.dirname(path), exist_ok=True)
+
         torch.save(to_save, path)
-        print(f"Saved model to {path}")
+        print(f"[save_wrapper] Saved model to: {path}")
 
     def load_wrapper(self, path, map_location="cpu"):
+        """
+        Load student pretraining checkpoint into Stage 2 model.
+        Missing classifier / pooling keys are expected when loading Stage 1 into Stage 2.
+        """
+        if not os.path.exists(path):
+            raise FileNotFoundError(path)
+
         sd = torch.load(path, map_location=map_location)
-        sd = {k: v for k, v in sd.items() if "vq_net" not in k and "teacher" not in k}
-        self.load_state_dict(sd, strict=False)
-        print("Loaded Student weights.")
-def get_configs():
-    import random
-    import numpy as np
-    import argparse
-    fix_seed = 2021
-    random.seed(fix_seed)
-    torch.manual_seed(fix_seed)
-    np.random.seed(fix_seed)
 
-    parser = argparse.ArgumentParser(description='TimesNet')
+        if isinstance(sd, dict) and "state_dict" in sd:
+            sd = sd["state_dict"]
 
-    # basic config
-    parser.add_argument('--task_name', type=str, required=False, default='long_term_forecast',
-                        help='task name, options:[long_term_forecast, short_term_forecast, imputation, classification, anomaly_detection]')
-    parser.add_argument('--is_training', type=int, required=False, default=1, help='status')
-    parser.add_argument('--model_id', type=str, required=False, default='test', help='model id')
-    parser.add_argument('--model', type=str, required=False, default='Autoformer',
-                        help='model name, options: [Autoformer, Transformer, TimesNet]')
+        sd = {
+            k: v for k, v in sd.items()
+            if "vq_net" not in k and "teacher" not in k
+        }
 
-    # datasets loader
-    parser.add_argument('--datasets', type=str, required=False, default='ETTh1', help='dataset type')
-    parser.add_argument('--data', type=str, default='ETTh1', help='dataset type')
-    parser.add_argument('--root_path', type=str, default='./datasets/ETT/', help='root path of the datasets file')
-    parser.add_argument('--data_path', type=str, default='ETTh1.csv', help='datasets file')
-    parser.add_argument('--features', type=str, default='M',
-                        help='forecasting task, options:[M, S, MS]; M:multivariate predict multivariate, S:univariate predict univariate, MS:multivariate predict univariate')
-    parser.add_argument('--target', type=str, default='OT', help='target feature in S or MS task')
-    parser.add_argument('--freq', type=str, default='h',
-                        help='freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h')
-    parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
+        ret = self.load_state_dict(sd, strict=False)
 
-    # forecasting task
-    parser.add_argument('--seq_len', type=int, default=96, help='input sequence length')
-    parser.add_argument('--label_len', type=int, default=48, help='start token length')
-    parser.add_argument('--pred_len', type=int, default=96, help='prediction sequence length')
-    parser.add_argument('--seasonal_patterns', type=str, default='Monthly', help='subset for M4')
-    parser.add_argument('--inverse', action='store_true', help='inverse output datasets', default=False)
-
-    # inputation task
-    parser.add_argument('--mask_rate', type=float, default=0.25, help='mask ratio')
-
-    # anomaly detection task
-    parser.add_argument('--anomaly_ratio', type=float, default=0.25, help='prior anomaly ratio (%%)')
-
-    # model define
-    parser.add_argument('--expand', type=int, default=2, help='expansion factor for Mamba')
-    parser.add_argument('--d_conv', type=int, default=4, help='conv kernel size for Mamba')
-    parser.add_argument('--top_k', type=int, default=5, help='for TimesBlock')
-    parser.add_argument('--num_kernels', type=int, default=6, help='for Inception')
-    parser.add_argument('--enc_in', type=int, default=7, help='encoder input size')
-    parser.add_argument('--dec_in', type=int, default=7, help='decoder input size')
-    parser.add_argument('--c_out', type=int, default=7, help='output size')
-    parser.add_argument('--d_model', type=int, default=512, help='dimension of model')
-    parser.add_argument('--n_heads', type=int, default=8, help='num of heads')
-    parser.add_argument('--e_layers', type=int, default=2, help='num of encoder layers')
-    parser.add_argument('--d_layers', type=int, default=1, help='num of decoder layers')
-    parser.add_argument('--d_ff', type=int, default=2048, help='dimension of fcn')
-    parser.add_argument('--moving_avg', type=int, default=25, help='window size of moving average')
-    parser.add_argument('--factor', type=int, default=1, help='attn factor')
-    parser.add_argument('--distil', action='store_false',
-                        help='whether to use distilling in encoder, using this argument means not using distilling',
-                        default=True)
-    parser.add_argument('--dropout', type=float, default=0.1, help='dropout')
-    parser.add_argument('--embed', type=str, default='timeF',
-                        help='time features encoding, options:[timeF, fixed, learned]')
-    parser.add_argument('--activation', type=str, default='gelu', help='activation')
-    parser.add_argument('--channel_independence', type=int, default=1,
-                        help='0: channel dependence 1: channel independence for FreTS model')
-    parser.add_argument('--decomp_method', type=str, default='moving_avg',
-                        help='method of series decompsition, only support moving_avg or dft_decomp')
-    parser.add_argument('--use_norm', type=int, default=1, help='whether to use normalize; True 1 False 0')
-    parser.add_argument('--down_sampling_layers', type=int, default=0, help='num of down sampling layers')
-    parser.add_argument('--down_sampling_window', type=int, default=1, help='down sampling window size')
-    parser.add_argument('--down_sampling_method', type=str, default=None,
-                        help='down sampling method, only support avg, max, conv')
-    parser.add_argument('--seg_len', type=int, default=96,
-                        help='the length of segmen-wise iteration of SegRNN')
-
-    # optimization
-    parser.add_argument('--num_workers', type=int, default=10, help='datasets loader num workers')
-    parser.add_argument('--itr', type=int, default=1, help='experiments times')
-    parser.add_argument('--train_epochs', type=int, default=10, help='train epochs')
-    parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input datasets')
-    parser.add_argument('--patience', type=int, default=3, help='early stopping patience')
-    parser.add_argument('--learning_rate', type=float, default=0.0001, help='optimizer learning rate')
-    parser.add_argument('--des', type=str, default='test', help='exp description')
-    parser.add_argument('--loss', type=str, default='MSE', help='loss function')
-    parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
-    parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
-
-    # GPU
-    parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
-    parser.add_argument('--gpu', type=int, default=0, help='gpu')
-    parser.add_argument('--gpu_type', type=str, default='cuda', help='gpu type')  # cuda or mps
-    parser.add_argument('--use_multi_gpu', action='store_true', help='use multiple gpus', default=False)
-    parser.add_argument('--devices', type=str, default='0,1,2,3', help='device ids of multile gpus')
-
-    # de-stationary projector params
-    parser.add_argument('--p_hidden_dims', type=int, nargs='+', default=[128, 128],
-                        help='hidden layer dimensions of projector (List)')
-    parser.add_argument('--p_hidden_layers', type=int, default=2, help='number of hidden layers in projector')
-
-    # metrics (dtw)
-    parser.add_argument('--use_dtw', type=bool, default=False,
-                        help='the controller of using dtw metric (dtw is time consuming, not suggested unless necessary)')
-
-    # Augmentation
-    parser.add_argument('--augmentation_ratio', type=int, default=0, help="How many times to augment")
-    parser.add_argument('--seed', type=int, default=2, help="Randomization seed")
-    parser.add_argument('--jitter', default=False, action="store_true", help="Jitter preset augmentation")
-    parser.add_argument('--scaling', default=False, action="store_true", help="Scaling preset augmentation")
-    parser.add_argument('--permutation', default=False, action="store_true",
-                        help="Equal Length Permutation preset augmentation")
-    parser.add_argument('--randompermutation', default=False, action="store_true",
-                        help="Random Length Permutation preset augmentation")
-    parser.add_argument('--magwarp', default=False, action="store_true", help="Magnitude warp preset augmentation")
-    parser.add_argument('--timewarp', default=False, action="store_true", help="Time warp preset augmentation")
-    parser.add_argument('--windowslice', default=False, action="store_true", help="Window slice preset augmentation")
-    parser.add_argument('--windowwarp', default=False, action="store_true", help="Window warp preset augmentation")
-    parser.add_argument('--rotation', default=False, action="store_true", help="Rotation preset augmentation")
-    parser.add_argument('--spawner', default=False, action="store_true", help="SPAWNER preset augmentation")
-    parser.add_argument('--dtwwarp', default=False, action="store_true", help="DTW warp preset augmentation")
-    parser.add_argument('--shapedtwwarp', default=False, action="store_true", help="Shape DTW warp preset augmentation")
-    parser.add_argument('--wdba', default=False, action="store_true", help="Weighted DBA preset augmentation")
-    parser.add_argument('--discdtw', default=False, action="store_true",
-                        help="Discrimitive DTW warp preset augmentation")
-    parser.add_argument('--discsdtw', default=False, action="store_true",
-                        help="Discrimitive shapeDTW warp preset augmentation")
-    parser.add_argument('--extra_tag', type=str, default="", help="Anything extra")
-
-    # TimeXer
-    parser.add_argument('--patch_len', type=int, default=16, help='patch length')
-
-    # GCN
-    parser.add_argument('--node_dim', type=int, default=10, help='each node embbed to dim dimentions')
-    parser.add_argument('--gcn_depth', type=int, default=2, help='')
-    parser.add_argument('--gcn_dropout', type=float, default=0.3, help='')
-    parser.add_argument('--propalpha', type=float, default=0.3, help='')
-    parser.add_argument('--conv_channel', type=int, default=32, help='')
-    parser.add_argument('--skip_channel', type=int, default=32, help='')
-
-    parser.add_argument('--individual', action='store_true', default=False,
-                        help='DLinear: a linear layer for each variate(channel) individually')
-
-    # TimeFilter
-    parser.add_argument('--alpha', type=float, default=0.1, help='KNN for Graph Construction')
-    parser.add_argument('--top_p', type=float, default=0.5, help='Dynamic Routing in MoE')
-    parser.add_argument('--pos', type=int, choices=[0, 1], default=1, help='Positional Embedding. Set pos to 0 or 1')
-
-    # SensorLLMFuy
-    parser.add_argument('--ts_backbone_yaml', type=str, default='ts_backbone.yaml', help='ts_backbone_yaml')
-    parser.add_argument('--log_dir', type=str, default='./logs', help='log_dir')
-    parser.add_argument('--dataset_key', type=str, default='mhealth', help='dataset_key')
-    parser.add_argument('--stage', type=int, default=1, help='stage')
-    parser.add_argument('--llama_name', type=str, default=r"D:\fuy\MyCode\SensorLLM\Llama-3.2-1B", help='stage')
-    parser.add_argument('--two_stage', type=int, default=1, help='two_stage')
-    parser.add_argument('--freeze_llm', type=int, default=1, help='freeze_llm')
-    parser.add_argument('--trainable_modules', type=str, default="sensor_proj,channel_id,recon_head,cls_head",
-                        help='trainable_modules')
-    parser.add_argument('--run_id', type=str, default="202501220_0956", help='trainable_modules')
-    parser.add_argument('--debug_fake_llm', type=bool, default=False, help='debug_fake_llm')
-
-    args = parser.parse_args()
-    return args
-
-if __name__ == '__main__':
-    configs = get_configs()
-    configs.ts_backbone_yaml = r"D:\fuy\MyCode\SensorLLMLib_v2\configs\ts_backbone.yaml"
-    configs.debug_fake_llm = True
-
-    configs.stage=2
-    if torch.cuda.is_available() and configs.use_gpu:
-        configs.device = torch.device('cuda:{}'.format(configs.gpu))
-        print('Using GPU')
-    else:
-        if hasattr(torch.backends, "mps"):
-            configs.device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
-        else:
-            configs.device = torch.device("cpu")
-        print('Using cpu or mps')
-    model = Model(configs).to("cuda:0")
-    x = torch.rand(32,96,15)
-    c = model(x.to("cuda:0"),None,None)
-    d = 'end'
+        print("[load_wrapper] Loaded student weights.")
+        print("[load_wrapper] missing keys:", ret.missing_keys)
+        print("[load_wrapper] unexpected keys:", ret.unexpected_keys)

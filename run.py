@@ -95,7 +95,7 @@ if __name__ == '__main__':
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=10, help='datasets loader num workers')
-    parser.add_argument('--itr', type=int, default=6, help='experiments times')
+    parser.add_argument('--itr', type=int, default=1, help='experiments times')
     parser.add_argument('--train_epochs', type=int, default=10, help='train epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input datasets')
     parser.add_argument('--patience', type=int, default=3, help='early stopping patience')
@@ -204,9 +204,51 @@ if __name__ == '__main__':
     parser.add_argument('--vqvae_path', type=str, default="vqvae_path", help='vqvae_path')
     parser.add_argument('--use_hard_label', type=int, default=0, help='use_hard_label')
     parser.add_argument('--mask_mode', type=str, default="random", help='mask_mode')
+    parser.add_argument("--diagnose_vq", type=int, default=0)
+    parser.add_argument("--apply_eval_missing", type=int, default=0)
+    parser.add_argument("--distill_temperature ", type=float, default=0.5)
+    parser.add_argument(
+        "--eval_missing_protocol",
+        type=str,
+        default="clean",
+        choices=[
+            "clean",
+            "random_patch",
+            "temporal_block",
+            "channel_wise",
+            "sensor_wise",
+            "modality_wise",
+        ],
+    )
+
+    parser.add_argument("--eval_missing_ratio", type=float, default=0.0)
+    parser.add_argument("--eval_mask_value", type=float, default=0.0)
+
+    parser.add_argument("--eval_sensor_groups", type=str, default="")
+    parser.add_argument("--eval_modality_groups", type=str, default="")
+    parser.add_argument("--lambda_distill", type=float, default=1.0)
+    parser.add_argument("--align_mask_rate", type=float, default=0.4)
+
+    parser.add_argument("--lambda_activity", type=float, default=0.5)
+    parser.add_argument("--teacher_temperature", type=float, default=1.0)
+    parser.add_argument("--teacher_prompt", type=str,
+                        default="Recover masked wearable sensor primitives and infer the human activity:")
+    parser.add_argument("--use_semantic_primitive", type=int, default=1)
+    parser.add_argument("--semantic_weight", type=float, default=0.5)
+    parser.add_argument("--auto_build_primitive_profile", type=int, default=1)
+    parser.add_argument("--pretrain_monitor", type=str, default="activity_acc")
+    parser.add_argument("--primitive_profile_path", type=str, default=None)
+    parser.add_argument("--primitive_profile_max_batches", type=int, default=-1)
+    parser.add_argument("--stage2_trainable", type=str, default="activity_only")
+
+    parser.add_argument("--weight_decay", type=float, default=0.0001)
+    parser.add_argument("--min_lr", type=float, default=0.00001)
+    parser.add_argument("--warmup_epochs", type=int, default=0)
 
 
-
+    parser.add_argument("--force_build_primitive_profile", type=int, default=1)
+    parser.add_argument("--primitive_profile_examples", type=int, default=5)
+    parser.add_argument("--primitive_profile_min_valid_ratio", type=float, default=0.5)
 
 
     args = parser.parse_args()

@@ -7,6 +7,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from typing import List, Tuple, Dict, Any, Optional
 
 from models_new_version_run.VQ_VAE import IMU_VQ_Model
+from utils.label_utils import get_label_names_from_cfg
 
 try:
     import yaml
@@ -35,8 +36,63 @@ except Exception:
 # --num_workers=0
 # --vqvae_path=qua_recon_path
 # --test_subjects="subject1,subject3,subject6"
+# models_new_version_run/Alignment_Stage.py
+import os
+from typing import Any, Dict
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+try:
+    import yaml
+except Exception:
+    yaml = None
+
+from models_new_version_run.VQ_VAE import IMU_VQ_Model
+
+
+
+import os
+from typing import Any, Dict, Optional, List
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+try:
+    import yaml
+except Exception:
+    yaml = None
+
+from models_new_version_run.VQ_VAE import IMU_VQ_Model
+from models_new_version_run.PrimitiveLlmTeacher import (
+    PrimitiveLLMTeacherCore,
+    load_codebook_from_path_or_vq,
+    pad_to_multiple,
+)
+
 
 class AlignmentModel(nn.Module):
+    """
+    Primitive-language teacher alignment model.
+
+    Main training objective:
+        loss = loss_primitive + beta * loss_activity
+
+    Frozen:
+        - VQ-VAE
+        - LLM backbone
+
+    Trainable:
+        - primitive projector
+        - mask embedding
+        - primitive position embedding
+        - query embedding
+        - primitive recovery head
+        - activity classification head
+    """
+
     def __init__(self, args):
         super().__init__()
 
@@ -44,243 +100,550 @@ class AlignmentModel(nn.Module):
         self.stage = int(getattr(args, "stage", 1))
         self.device = args.device
 
-        print(f"[Model] Init in Stage: {self.stage}")
+        print(f"[AlignmentModel] Init in Stage: {self.stage}")
 
-        # 1. 解析 Stage
-        self.stage = int(getattr(args, "stage", 1))
-        print(f"init Model in Stage: {self.stage}")
-        # -------- dataset cfg load --------
-        self.dataset_key = str(getattr(args, "dataset_key", getattr(args, "data", "mhealth"))).lower()
+        # ============================================================
+        # Dataset config
+        # ============================================================
+        self.dataset_key = str(
+            getattr(args, "dataset_key", getattr(args, "data", "mhealth"))
+        ).lower()
+
         self.ds_cfg: Dict[str, Any] = {}
+
         if hasattr(args, "ds_cfg") and isinstance(args.ds_cfg, dict):
             self.ds_cfg = args.ds_cfg
         else:
             ts_yaml = getattr(args, "ts_backbone_yaml", None)
+
             if ts_yaml is not None:
                 if yaml is None:
-                    raise ImportError("pyyaml not installed but ts_backbone_yaml is set.")
-                if not os.path.exists(ts_yaml):
-                    raise FileNotFoundError(ts_yaml)
-                with open(ts_yaml, "r", encoding="utf-8") as f:
-                    cfg_all = yaml.safe_load(f)
-                if self.dataset_key not in cfg_all:
-                    raise KeyError(f"{self.dataset_key} not in {ts_yaml}")
-                self.ds_cfg = cfg_all[self.dataset_key]
-        self.device = args.device
-        self.C = int(self.ds_cfg.get("channel_num", getattr(args, "enc_in", 15)))
-        self.num_class = int(getattr(args, "num_class", 12))
-        self.seq_len_orig = int(getattr(args, "seq_len", 200))  # 原始数据长度
+                    raise ImportError("pyyaml is not installed but ts_backbone_yaml is set.")
 
-        vqvae_path = getattr(args, "vqvae_path", None)
-        alignment_path = getattr(args, "alignment_path", None)
-        self.qua_path = self.ds_cfg.get(vqvae_path, None)
+                if os.path.exists(ts_yaml):
+                    config_path = ts_yaml
+                else:
+                    project_path = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+                    config_path = os.path.join(project_path, "configs", ts_yaml)
+
+                if not os.path.exists(config_path):
+                    raise FileNotFoundError(f"ts_backbone_yaml not found: {config_path}")
+
+                with open(config_path, "r", encoding="utf-8") as f:
+                    cfg_all = yaml.safe_load(f)
+
+                if self.dataset_key not in cfg_all:
+                    raise KeyError(f"{self.dataset_key} not found in {config_path}")
+
+                self.ds_cfg = cfg_all[self.dataset_key]
+
+        self.C = int(self.ds_cfg.get("channel_num", getattr(args, "enc_in", 15)))
+        self.num_class = int(self.ds_cfg.get("num_labels", getattr(args, "num_class", 12)))
+        self.seq_len_orig = int(getattr(args, "seq_len", 200))
+
+        # if hasattr(args, "label_names") and args.label_names is not None:
+        #     self.label_names = [str(x) for x in args.label_names]
+        # else:
+        #     self.label_names = self._get_label_names()
+
+        self.label_names = get_label_names_from_cfg(
+            self.ds_cfg,
+            num_class=self.num_class,
+        )
+
+        print(f"[AlignmentModel] dataset_key={self.dataset_key}")
+        print(f"[AlignmentModel] channel_num={self.C}, num_class={self.num_class}")
+        print(f"[AlignmentModel] label_names={self.label_names}")
+
+        # ============================================================
+        # Load frozen VQ-VAE
+        # ============================================================
         self.vq_net = IMU_VQ_Model(args)
 
-        if self.qua_path is not None:
-            vq_net_state_dict = torch.load(self.qua_path + os.sep + "best_wrapper.pth", map_location='cpu')
-            if 'state_dict' in vq_net_state_dict:
-                vq_net_state_dict = vq_net_state_dict['state_dict']
-            self.vq_net.load_state_dict(vq_net_state_dict, strict=True)
-            self.vq_net.eval()  # Set the model to evaluation mode
+        vqvae_key = getattr(args, "vqvae_path", None)
+        self.qua_path = None
 
-            # set vq net requires_grad to False
-            for param in self.vq_net.parameters():
-                param.requires_grad = False
-            # --------------------------------------------
-        # --- 2. Calculate Alignment (Critical) ---
-        # VQ Stride = stride_t ^ down_t (e.g., 2^3 = 8)
-        self.vq_stride = self.vq_net.stride_t ** self.vq_net.down_t
-        self.patch_len = self.vq_stride  # Student Patch MUST match VQ Stride
+        if vqvae_key is not None:
+            self.qua_path = self.ds_cfg.get(vqvae_key, None)
 
-        # Calculate Padded Length
-        # e.g., if L=195, Stride=8 -> L_pad=200
-        self.seq_len_pad = ((self.seq_len_orig + self.vq_stride - 1) // self.vq_stride) * self.vq_stride
+        if self.qua_path is None:
+            self.qua_path = getattr(args, "vqvae_ckpt_dir", None)
+
+        if self.qua_path is None:
+            raise ValueError(
+                "VQ-VAE checkpoint directory is not provided. "
+                "Set args.vqvae_path as a key in ds_cfg, or set args.vqvae_ckpt_dir."
+            )
+
+        vq_ckpt_path = os.path.join(self.qua_path, "best_wrapper.pth")
+
+        if not os.path.exists(vq_ckpt_path):
+            raise FileNotFoundError(f"VQ-VAE checkpoint not found: {vq_ckpt_path}")
+
+        print(f"[AlignmentModel] Loading VQ-VAE from: {vq_ckpt_path}")
+
+        vq_state = torch.load(vq_ckpt_path, map_location="cpu")
+
+        if isinstance(vq_state, dict) and "state_dict" in vq_state:
+            vq_state = vq_state["state_dict"]
+
+        self.vq_net.load_state_dict(vq_state, strict=True)
+        self.vq_net.to(self.device)
+        self.vq_net.eval()
+
+        for p in self.vq_net.parameters():
+            p.requires_grad = False
+
+        # ============================================================
+        # VQ primitive setting
+        # ============================================================
+        self.vq_stride = int(self.vq_net.stride_t ** self.vq_net.down_t)
+        self.patch_len = self.vq_stride
+
+        self.seq_len_pad = (
+            (self.seq_len_orig + self.vq_stride - 1) // self.vq_stride
+        ) * self.vq_stride
+
         self.P = self.seq_len_pad // self.patch_len
 
         print(
-            f"[Model Alignment] Orig={self.seq_len_orig}, Stride={self.vq_stride} -> Padded={self.seq_len_pad}, Patches(P)={self.P}")
+            f"[AlignmentModel] Orig={self.seq_len_orig}, "
+            f"Stride={self.vq_stride}, Padded={self.seq_len_pad}, Patches={self.P}"
+        )
 
-        # --- 3. Initialize Student ---
-        self.num_primitives = self.vq_net.code_num
+        self.num_primitives = int(
+            getattr(self.vq_net, "code_num", None)
+            or getattr(self.vq_net, "num_code", None)
+        )
+
+        if self.num_primitives <= 0:
+            raise ValueError(f"Invalid num_primitives={self.num_primitives}")
+
         self.mask_token_id = self.num_primitives
-        self.dim_student = int(getattr(args, "dim_student", 256))
-        if hasattr(self, 'qua_path') and self.qua_path:
-            cb_path = self.qua_path + os.sep + "best_codebook.pth"
-            if os.path.exists(cb_path):
-                self.codebook = torch.load(cb_path, map_location="cpu").to(self.device)
+
+        # ============================================================
+        # Codebook
+        # ============================================================
+        self.codebook = load_codebook_from_path_or_vq(
+            vq_net=self.vq_net,
+            ckpt_dir=self.qua_path,
+            device=self.device,
+        )
+
+        self.num_vq_codes = int(self.codebook.shape[0])
+        self.vq_dim = int(self.codebook.shape[1])
+
+        if self.num_vq_codes != self.num_primitives:
+            raise ValueError(
+                f"Codebook size mismatch: codebook K={self.num_vq_codes}, "
+                f"vq_net num_primitives={self.num_primitives}."
+            )
+
+        # ============================================================
+        # Primitive profile
+        # ============================================================
+        profile_path = getattr(args, "primitive_profile_path", None)
+
+        if profile_path is None:
+            strong_profile_path = os.path.join(self.qua_path, "primitive_profile_strong.json")
+            weak_profile_path = os.path.join(self.qua_path, "primitive_profile.json")
+
+            if os.path.exists(strong_profile_path):
+                profile_path = strong_profile_path
+            elif os.path.exists(weak_profile_path):
+                profile_path = weak_profile_path
             else:
-                self.codebook = self.vq_net.quantizer.codebook.data.to(self.device)
+                profile_path = None
+
+
+        if profile_path is not None:
+            print(f"[AlignmentModel] Using primitive profile: {profile_path}")
         else:
-            self.codebook = self.vq_net.quantizer.codebook.data.to(self.device)
+            print("[AlignmentModel] No primitive profile is provided. Use default primitive descriptions.")
 
+        # ============================================================
+        # Teacher core
+        # ============================================================
+        if not hasattr(args, "llama_name") or args.llama_name is None:
+            raise ValueError("args.llama_name is required for AlignmentModel.")
 
+        self.lambda_activity = float(getattr(args, "lambda_activity", 0.5))
 
-        # 获取 VQ Codebook 用于初始化
-        # 假设 codebook shape: [num_codes, vq_dim]
-        self.num_vq_codes = self.codebook.shape[0]
-        self.vq_dim = self.codebook.shape[1]
-
-        # 2. 拿来 Llama (冻结)
-        print(f"[Align] Loading Frozen Llama from {args.llama_name}...")
-        self.llm = AutoModelForCausalLM.from_pretrained(
-            args.llama_name,
-            torch_dtype=torch.float16,
-            trust_remote_code=True
-        ).to(self.device).eval()
-        for p in self.llm.parameters(): p.requires_grad = False
-        self.llm_dim = self.llm.config.hidden_size
-        self.tokenizer = AutoTokenizer.from_pretrained(args.llama_name)
-
-        # 3. 定义要训练的层 (Adapters)
-        # Projector: VQ Space -> LLM Space
-        self.projector = nn.Linear(self.vq_dim, self.llm_dim).to(self.device)
-
-        # Head: LLM Space -> VQ Space (预测下一个 Token)
-        self.output_head = nn.Linear(self.llm_dim, self.num_vq_codes).to(self.device)
-
-        # 初始化建议：Projector 最好稍微对齐一点，而不是完全随机
-        # 但如果是 Linear，Xavier 初始化即可
-        nn.init.xavier_normal_(self.projector.weight)
-        nn.init.xavier_normal_(self.output_head.weight)
-
-        # --- [新增] System Prompt 初始化 (与 Teacher 保持完全一致) ---
-        self.system_prompt = "Analyze sensor sequence:"
-        self.prompt_input_ids = self.tokenizer(self.system_prompt, return_tensors="pt").input_ids.to(self.device)
-
-        # 预计算 Prompt Embeddings (冻结)
-        with torch.no_grad():
-            self.prompt_embeds = self.llm.get_input_embeddings()(self.prompt_input_ids)
-            # self.prompt_embeds shape: [1, L_text, D]
-
-    def forward(self, x_imu, padding_mask=None, mode=None, labels=None):
-        """
-        x_imu: [B, L, C]
-        """
-        B = x_imu.shape[0]
-
-        with torch.no_grad():
-            gt_ids = self.vq_net.get_token_ids(x_imu)  # [B, T]
-            vq_embeds = F.embedding(gt_ids, self.codebook)  # [B, T, D_vq]
-
-        # 1. Project VQ features
-        sensor_embeds = self.projector(vq_embeds)  # [B, T, D_llm]
-
-        # 2. [关键] 拼接 Prompt + Sensor
-        # batch_prompt: [B, L_text, D_llm]
-        batch_prompt = self.prompt_embeds.expand(B, -1, -1)
-
-        # inputs_embeds: [B, L_text + T, D_llm]
-        inputs_embeds = torch.cat([batch_prompt, sensor_embeds], dim=1).to(self.llm.dtype)
-
-        # 3. Feed to LLM
-        outputs = self.llm(inputs_embeds=inputs_embeds, output_hidden_states=True)
-        last_hidden = outputs.hidden_states[-1]
-
-        # 4. [关键] 切片 (Slicing) - 拿掉 Prompt 部分的输出
-        # 我们不需要预测 Prompt，也不需要基于 Prompt 预测第一个 Sensor Token (通常 NTP 从第一个有效 Token 开始)
-        # 或者为了简单，我们让 Output Head 只处理 Sensor 部分的 hidden states
-        L_text = batch_prompt.shape[1]
-        sensor_hidden = last_hidden[:, L_text:, :]  # [B, T, D_llm]
-
-        # 5. Predict Logits
-        logits = self.output_head(sensor_hidden.float())  # [B, T, num_codes]
-
-        # 6. Calculate Loss (Next Token Prediction)
-        # logits[t] 预测 gt_ids[t+1]
-        shift_logits = logits[..., :-1, :].contiguous()
-        shift_labels = gt_ids[..., 1:].contiguous()
-
-        loss = F.cross_entropy(
-            shift_logits.view(-1, self.num_vq_codes),
-            shift_labels.view(-1)
+        self.teacher_core = PrimitiveLLMTeacherCore(
+            llm_path=args.llama_name,
+            codebook_weights=self.codebook,
+            mask_token_id=self.mask_token_id,
+            max_patches=self.P,
+            device=self.device,
+            temperature=float(getattr(args, "teacher_temperature", 1.0)),
+            system_prompt=str(
+                getattr(
+                    args,
+                    "teacher_prompt",
+                    "You are a wearable-sensor motion primitive teacher. "
+                    "Each primitive represents a local IMU motion pattern with semantic profile information, "
+                    "including activity association, motion intensity, temporal variation, periodicity, "
+                    "spectral structure, dominant sensor channel, and transition context. "
+                    "Given the visible primitive sequence with masked positions, recover the missing primitives "
+                    "and infer the human activity.",
+                )
+            ),
+            num_classes=self.num_class,
+            label_names=self.label_names,
+            primitive_profile_path=profile_path,
+            use_semantic_primitive=bool(int(getattr(args, "use_semantic_primitive", 1))),
+            semantic_weight=float(getattr(args, "semantic_weight", 0.5)),
+            enable_explanation=bool(int(getattr(args, "enable_explanation", 1))),
         )
 
-        return loss,None,None
+        self.teacher_core.freeze_llm_only()
 
+    # ============================================================
+    # Dataset label names
+    # ============================================================
+    def _get_label_names(self) -> Optional[List[str]]:
+        """
+        Get label names from dataset config.
 
-    #  另一个版本的loss
-    '''
-        def forward(self, x_imu, padding_mask=None, mode=None, labels=None):
-        B = x_imu.shape[0]
+        Priority:
+            1. ds_cfg["label_names"] = ["Walking", ...]
+            2. ds_cfg["id2label"] = {0: "Walking", 1: "..."}
+            3. ds_cfg["id2label"] = {"0": "Walking", "1": "..."}
+            4. None
+        """
+        if not isinstance(self.ds_cfg, dict):
+            return None
 
-        # 1. 获取 GT (保持不变)
+        # ------------------------------------------------------------
+        # 1) Direct label_names list
+        # ------------------------------------------------------------
+        if "label_names" in self.ds_cfg and self.ds_cfg["label_names"] is not None:
+            label_names = [str(x) for x in self.ds_cfg["label_names"]]
+
+            num_class = int(getattr(self, "num_class", len(label_names)))
+
+            if len(label_names) != num_class:
+                raise ValueError(
+                    f"len(label_names)={len(label_names)} does not match num_class={num_class}."
+                )
+
+            return label_names
+
+        # ------------------------------------------------------------
+        # 2) id2label dict from YAML
+        # ------------------------------------------------------------
+        if "id2label" in self.ds_cfg and self.ds_cfg["id2label"] is not None:
+            id2label = self.ds_cfg["id2label"]
+
+            if not isinstance(id2label, dict):
+                raise TypeError(
+                    f"ds_cfg['id2label'] should be dict, got {type(id2label)}"
+                )
+
+            # YAML may load keys as int or str. Normalize to int.
+            normalized = {}
+
+            for k, v in id2label.items():
+                try:
+                    kk = int(k)
+                except Exception:
+                    raise ValueError(f"id2label key should be convertible to int, got {k}")
+
+                normalized[kk] = str(v)
+
+            num_class = int(getattr(self, "num_class", len(normalized)))
+
+            missing = [i for i in range(num_class) if i not in normalized]
+
+            if len(missing) > 0:
+                raise ValueError(
+                    f"id2label is missing labels for ids: {missing}. "
+                    f"Available keys: {sorted(normalized.keys())}"
+                )
+
+            label_names = [normalized[i] for i in range(num_class)]
+
+            return label_names
+
+        return None
+
+    # ============================================================
+    # Mask sampling
+    # ============================================================
+    def _sample_alignment_mask(self, valid_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Sample primitive mask.
+
+        Args:
+            valid_mask:
+                [B, P], True means valid primitive position.
+
+        Returns:
+            final_mask:
+                [B, P], True means masked and supervised.
+        """
+        B, P = valid_mask.shape
+
+        align_mask_rate = getattr(self.args, "align_mask_rate", None)
+
+        if align_mask_rate is not None:
+            mask_ratio = float(align_mask_rate)
+        else:
+            mask_min = float(getattr(self.args, "align_mask_min", 0.15))
+            mask_max = float(getattr(self.args, "align_mask_max", 0.50))
+
+            if mask_min < 0 or mask_max > 1 or mask_min > mask_max:
+                raise ValueError(
+                    f"Invalid mask range: align_mask_min={mask_min}, align_mask_max={mask_max}"
+                )
+
+            mask_ratio = torch.empty(1, device=self.device).uniform_(mask_min, mask_max).item()
+
+        rand_mask = torch.rand(B, P, device=self.device) < mask_ratio
+        final_mask = rand_mask & valid_mask
+
+        # Guarantee at least one masked position for each valid sample.
+        for b in range(B):
+            if valid_mask[b].sum() > 0 and final_mask[b].sum() == 0:
+                valid_idx = torch.where(valid_mask[b])[0]
+                chosen = valid_idx[
+                    torch.randint(0, valid_idx.numel(), (1,), device=self.device)
+                ]
+                final_mask[b, chosen] = True
+
+        return final_mask
+
+    # ============================================================
+    # Forward
+    # ============================================================
+    def forward(
+        self,
+        x_imu,
+        padding_mask=None,
+        mode=None,
+        labels=None,
+        generate_explanation: bool = False,
+    ):
+        """
+        Args:
+            x_imu:
+                [B, L, C]
+
+            labels:
+                [B]
+
+            mode:
+                "train" / "eval" / "classify"
+                If mode == "classify", no random mask is used.
+
+        Returns:
+            loss, logits, metrics
+        """
+        if not torch.is_tensor(x_imu):
+            x_imu = torch.as_tensor(x_imu)
+
+        x_imu = x_imu.to(self.device).float()
+
+        B, L_orig, C = x_imu.shape
+
+        if C != self.C:
+            raise ValueError(f"Input channel C={C}, but dataset expects C={self.C}.")
+
+        if labels is not None:
+            labels = labels.to(self.device).long()
+
+        if padding_mask is not None:
+            padding_mask = padding_mask.to(self.device).bool()
+
+        # ============================================================
+        # Pad to fixed length expected by teacher
+        # ============================================================
+        x_pad, _ = pad_to_multiple(x_imu, self.vq_stride, pad_value=0.0)
+
+        if x_pad.shape[1] != self.seq_len_pad:
+            if x_pad.shape[1] > self.seq_len_pad:
+                x_pad = x_pad[:, :self.seq_len_pad, :]
+                if padding_mask is not None:
+                    padding_mask = padding_mask[:, :self.seq_len_pad]
+            else:
+                pad_len = self.seq_len_pad - x_pad.shape[1]
+                pad = x_pad.new_zeros(B, pad_len, C)
+                x_pad = torch.cat([x_pad, pad], dim=1)
+
+                if padding_mask is not None:
+                    pad_m = torch.zeros((B, pad_len), device=self.device, dtype=torch.bool)
+                    padding_mask = torch.cat([padding_mask, pad_m], dim=1)
+
+        # ============================================================
+        # VQ primitive ids
+        # ============================================================
         with torch.no_grad():
-            gt_ids = self.vq_net.get_token_ids(x_imu)
-            vq_embeds = F.embedding(gt_ids, self.codebook)
+            gt_ids, valid_mask = self.vq_net.get_token_ids_with_mask(
+                features=x_pad,
+                padding_mask=padding_mask,
+            )
 
-        # 2. Projector & LLM (保持不变)
-        sensor_embeds = self.projector(vq_embeds)
-        batch_prompt = self.prompt_embeds.expand(B, -1, -1)
-        inputs_embeds = torch.cat([batch_prompt, sensor_embeds], dim=1).to(self.llm.dtype)
+        gt_ids = gt_ids.to(self.device).long()
+        valid_mask = valid_mask.to(self.device).bool()
 
-        outputs = self.llm(inputs_embeds=inputs_embeds, output_hidden_states=True)
-        last_hidden = outputs.hidden_states[-1]
+        if gt_ids.shape[1] != self.P:
+            if gt_ids.shape[1] > self.P:
+                gt_ids = gt_ids[:, :self.P]
+                valid_mask = valid_mask[:, :self.P]
+            else:
+                raise ValueError(f"VQ tokens {gt_ids.shape[1]} < expected P={self.P}")
 
-        # 3. 切片 & 预测 Logits (保持不变)
-        L_text = batch_prompt.shape[1]
-        sensor_hidden = last_hidden[:, L_text:, :]
-        logits = self.output_head(sensor_hidden.float())  # [B, T, K]
+        # ============================================================
+        # Mask strategy
+        # ============================================================
+        classify_only = mode in ["classify", "eval_no_mask", "test"]
 
-        # --- Loss 1: Cross Entropy (你原本的) ---
-        shift_logits = logits[..., :-1, :].contiguous()
-        shift_labels = gt_ids[..., 1:].contiguous()
-        loss_ce = F.cross_entropy(
-            shift_logits.view(-1, self.num_vq_codes),
-            shift_labels.view(-1)
+        if classify_only:
+            primitive_loss_mask = torch.zeros_like(valid_mask, dtype=torch.bool)
+        else:
+            primitive_loss_mask = self._sample_alignment_mask(valid_mask=valid_mask)
+
+        teacher_input_ids = gt_ids.clone()
+
+        # Mask supervised positions.
+        teacher_input_ids[primitive_loss_mask] = self.mask_token_id
+
+        # Padding positions are also replaced by mask token,
+        # but they are not supervised by primitive loss.
+        teacher_input_ids[~valid_mask] = self.mask_token_id
+
+        # ============================================================
+        # Teacher forward
+        # ============================================================
+        loss, teacher_out, metrics = self.teacher_core(
+            masked_ids=teacher_input_ids,
+            labels=labels,
+            target_ids=gt_ids,
+            valid_mask=valid_mask,
+            return_loss=True,
+            primitive_loss_mask=primitive_loss_mask,
+            lambda_activity=self.lambda_activity,
+            generate_explanation=generate_explanation,
+            max_new_tokens=int(getattr(self.args, "max_new_tokens", 96)),
         )
 
-        # --- [新增] Loss 2: Reconstruction Loss (物理约束) ---
-        # 技巧：使用 Softmax 得到概率分布，进行加权求和，使其可导
-        # shift_logits 预测的是 gt_ids[..., 1:] (即 t+1 时刻的动作)
+        logits = teacher_out.logits
 
-        # a. 计算软分布 (Gumbel Softmax 或 Softmax)
-        probs = F.softmax(shift_logits, dim=-1)  # [B, T-1, K]
+        # Add extra metrics.
+        with torch.no_grad():
+            metrics["loss_align"] = metrics["loss_total"]
+            metrics["num_masked"] = int(primitive_loss_mask.sum().detach().item())
+            metrics["mask_ratio_actual"] = float(
+                primitive_loss_mask.sum().detach().item()
+                / max(valid_mask.sum().detach().item(), 1)
+            )
 
-        # b. "软"查表: 用概率加权 Codebook
-        # [B, T-1, K] @ [K, D] -> [B, T-1, D]
-        z_q_pred = torch.matmul(probs, self.codebook)
+            if teacher_out.activity_logits is not None:
+                metrics["has_activity_logits"] = 1.0
+            else:
+                metrics["has_activity_logits"] = 0.0
 
-        # c. 解码: 这一步需要你的 vq_net 暴露 decoder
-        # 注意: 你的 x_imu 需要切掉第一个时间步，与 shift_labels 对齐
-        # x_imu_target: [B, T-1, C]
-        # 注意: 这里通常需要对齐长度，假设 x_imu 已经被 Pad 好了
-        # 为了简单，我们可以只计算 Latent 层的 MSE，避免调用 Decoder (省显存)
+        return loss, logits, metrics
 
-        # 方案 A (推荐): Latent Consistency Loss (不需要 Decoder)
-        # 直接比较 "预测的向量" 和 "真实的 GT 向量"
-        gt_z_q = vq_embeds[:, 1:, :]  # [B, T-1, D] (GT 的 t+1 时刻向量)
-        loss_mse = F.mse_loss(z_q_pred, gt_z_q)
+    # ============================================================
+    # Inference helper
+    # ============================================================
+    def classify(self, x_imu, padding_mask=None):
+        """
+        Clean primitive classification without random mask.
 
-        # 方案 B (论文做法): End-to-End Reconstruction (需要 Decoder)
-        # x_recon = self.vq_net.decoder(z_q_pred)
-        # loss_mse = F.mse_loss(x_recon, x_imu[:, 1:, :])
+        Important:
+            Do NOT use @torch.no_grad() here, because Stage2 training
+            needs gradients through teacher_core.projector / query_embed /
+            activity_head, etc.
+        """
+        if not torch.is_tensor(x_imu):
+            x_imu = torch.as_tensor(x_imu)
 
-        # --- 总 Loss ---
-        # lambda 通常取 0.1 或 1.0，取决于量级
-        lambda_recon = 1.0
-        loss_total = loss_ce + lambda_recon * loss_mse
+        x_imu = x_imu.to(self.device).float()
 
-        # 返回 total loss
-        return loss_total, None, None
-    
-    '''
+        if padding_mask is not None:
+            padding_mask = padding_mask.to(self.device).bool()
 
+        B, L_orig, C = x_imu.shape
 
+        if C != self.C:
+            raise ValueError(f"Input channel C={C}, but dataset expects C={self.C}.")
 
+        # ============================================================
+        # Pad to fixed length expected by teacher
+        # ============================================================
+        x_pad, _ = pad_to_multiple(x_imu, self.vq_stride, pad_value=0.0)
+
+        if x_pad.shape[1] != self.seq_len_pad:
+            if x_pad.shape[1] > self.seq_len_pad:
+                x_pad = x_pad[:, :self.seq_len_pad, :]
+
+                if padding_mask is not None:
+                    padding_mask = padding_mask[:, :self.seq_len_pad]
+            else:
+                pad_len = self.seq_len_pad - x_pad.shape[1]
+                pad = x_pad.new_zeros(B, pad_len, C)
+                x_pad = torch.cat([x_pad, pad], dim=1)
+
+                if padding_mask is not None:
+                    pad_m = torch.zeros(
+                        (B, pad_len),
+                        device=self.device,
+                        dtype=torch.bool,
+                    )
+                    padding_mask = torch.cat([padding_mask, pad_m], dim=1)
+
+        # ============================================================
+        # VQ primitive ids: VQ-VAE is frozen, so this part can be no_grad
+        # ============================================================
+        with torch.no_grad():
+            gt_ids, valid_mask = self.vq_net.get_token_ids_with_mask(
+                features=x_pad,
+                padding_mask=padding_mask,
+            )
+
+        gt_ids = gt_ids.to(self.device).long()
+        valid_mask = valid_mask.to(self.device).bool()
+
+        if gt_ids.shape[1] != self.P:
+            if gt_ids.shape[1] > self.P:
+                gt_ids = gt_ids[:, :self.P]
+                valid_mask = valid_mask[:, :self.P]
+            else:
+                raise ValueError(f"VQ tokens {gt_ids.shape[1]} < expected P={self.P}")
+
+        input_ids = gt_ids.clone()
+        input_ids[~valid_mask] = self.mask_token_id
+
+        # ============================================================
+        # Teacher classification forward
+        # This part must keep grad during training.
+        # ============================================================
+        out = self.teacher_core(
+            masked_ids=input_ids,
+            valid_mask=valid_mask,
+            return_loss=False,
+            generate_explanation=False,
+        )
+
+        if out.activity_logits is None:
+            raise RuntimeError(
+                "teacher_core returned None activity_logits. "
+                "Please check whether activity_head is enabled."
+            )
+
+        return out.activity_logits, out.activity_probs
+    # ============================================================
+    # Save / Load
+    # ============================================================
     def save_wrapper(self, path):
-        torch.save({
-            'projector': self.projector.state_dict(),
-            'output_head': self.output_head.state_dict()
-        }, path)
-        print(f"Adapters saved to {path}")
+        self.teacher_core.save_adapter(path)
+        print(f"[AlignmentModel] Adapters saved to: {path}")
 
     def load_wrapper(self, path, map_location="cpu"):
-        sd = torch.load(path, map_location=map_location)
-        sd = {k: v for k, v in sd.items() if "vq_net" not in k and "teacher" not in k}
-        self.load_state_dict(sd, strict=False)
-        print("Loaded Student weights.")
-
-
+        self.teacher_core.load_adapter(path, strict=True)
+        print(f"[AlignmentModel] Loaded alignment adapter from: {path}")
 def get_configs():
     import random
     import numpy as np

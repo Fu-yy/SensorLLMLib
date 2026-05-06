@@ -1,5 +1,6 @@
 # exp/exp_sensorllm_unified_v2_fixed.py
 import copy
+import math
 import os
 import time
 import json
@@ -117,7 +118,6 @@ def run_kmeans_and_inject_centers(model, train_loader, best_wrapper_path, K=32, 
 以上是后期几个阶段的训练策略
 
 '''
-
 def to_secure_path(path):
     """
     处理路径兼容性：
@@ -161,7 +161,14 @@ def report_trainable_params(model, topk=200):
 
 def _unwrap(m):
     return m.module if hasattr(m, "module") else m
-
+def _pad_to_multiple(x: torch.Tensor, multiple: int, pad_value: float = 0.0):
+    B, L, C = x.shape
+    L_pad = ((L + multiple - 1) // multiple) * multiple
+    if L_pad == L:
+        return x, L
+    pad_len = L_pad - L
+    pad = x.new_full((B, pad_len, C), pad_value)
+    return torch.cat([x, pad], dim=1), L
 
 class TeeLogger:
     def __init__(self, log_path: str, flush: bool = True):
@@ -344,6 +351,129 @@ class Exp_Classification(Exp_Basic):
         if hasattr(m, "llm") and hasattr(m, "tokenizer"):
             return True
         return False
+
+    def _apply_missing_protocol(self, batch_x: torch.Tensor) -> torch.Tensor:
+        """
+        Apply structured missing-observation protocols during evaluation.
+
+        Args:
+            batch_x: Tensor with shape [B, L, C].
+
+        Returns:
+            Tensor with the same shape as batch_x.
+        """
+        protocol = str(getattr(self.args, "eval_missing_protocol", "clean")).lower()
+        ratio = float(getattr(self.args, "eval_missing_ratio", 0.0))
+        mask_value = float(getattr(self.args, "eval_mask_value", 0.0))
+
+        if protocol in ["clean", "none"] or ratio <= 0:
+            return batch_x
+
+        x = batch_x.clone()
+        B, L, C = x.shape
+
+        m = _unwrap(self.model)
+        patch_len = int(getattr(m, "patch_len", getattr(m, "vq_stride", 8)))
+        patch_len = max(1, patch_len)
+
+        if protocol in ["random_patch", "random"]:
+            # Randomly mask temporal patches.
+            P = int(math.ceil(L / patch_len))
+            num_mask = max(1, int(P * ratio))
+
+            for b in range(B):
+                patch_idx = torch.randperm(P, device=x.device)[:num_mask]
+                for p in patch_idx:
+                    start = int(p.item()) * patch_len
+                    end = min(start + patch_len, L)
+                    x[b, start:end, :] = mask_value
+
+        elif protocol in ["temporal_block", "block"]:
+            # Mask one consecutive temporal block.
+            block_len = max(1, int(L * ratio))
+
+            for b in range(B):
+                if block_len >= L:
+                    start = 0
+                else:
+                    start = int(torch.randint(0, L - block_len + 1, (1,), device=x.device).item())
+                end = min(start + block_len, L)
+                x[b, start:end, :] = mask_value
+
+        elif protocol in ["channel", "channel_wise"]:
+            # Randomly mask complete channels over the whole sequence.
+            num_drop = max(1, int(C * ratio))
+
+            for b in range(B):
+                drop_idx = torch.randperm(C, device=x.device)[:num_drop]
+                x[b, :, drop_idx] = mask_value
+
+        elif protocol in ["sensor", "sensor_wise"]:
+            """
+            Sensor-wise missingness requires predefined channel groups.
+            Example:
+                --eval_sensor_groups "0,1,2,3,4,5;6,7,8,9,10,11;12,13,14,15,16,17"
+            """
+            group_str = str(getattr(self.args, "eval_sensor_groups", "")).strip()
+            if not group_str:
+                raise ValueError(
+                    "eval_sensor_groups must be provided for sensor-wise missingness, "
+                    "e.g., '0,1,2,3,4,5;6,7,8,9,10,11'."
+                )
+
+            groups = []
+            for g in group_str.split(";"):
+                idx = [int(v.strip()) for v in g.split(",") if v.strip() != ""]
+                idx = [v for v in idx if 0 <= v < C]
+                if len(idx) > 0:
+                    groups.append(idx)
+
+            if len(groups) == 0:
+                raise ValueError("No valid sensor groups are parsed from eval_sensor_groups.")
+
+            num_drop_groups = max(1, int(len(groups) * ratio))
+
+            for b in range(B):
+                group_idx = torch.randperm(len(groups), device=x.device)[:num_drop_groups]
+                for gi in group_idx:
+                    ch_idx = groups[int(gi.item())]
+                    x[b, :, ch_idx] = mask_value
+
+        elif protocol in ["modality", "modality_wise"]:
+            """
+            Modality-wise missingness requires predefined modality groups.
+            Example:
+                --eval_modality_groups "0,1,2;3,4,5"
+            """
+            group_str = str(getattr(self.args, "eval_modality_groups", "")).strip()
+            if not group_str:
+                raise ValueError(
+                    "eval_modality_groups must be provided for modality-wise missingness, "
+                    "e.g., '0,1,2;3,4,5'."
+                )
+
+            groups = []
+            for g in group_str.split(";"):
+                idx = [int(v.strip()) for v in g.split(",") if v.strip() != ""]
+                idx = [v for v in idx if 0 <= v < C]
+                if len(idx) > 0:
+                    groups.append(idx)
+
+            if len(groups) == 0:
+                raise ValueError("No valid modality groups are parsed from eval_modality_groups.")
+
+            num_drop_groups = max(1, int(len(groups) * ratio))
+
+            for b in range(B):
+                group_idx = torch.randperm(len(groups), device=x.device)[:num_drop_groups]
+                for gi in group_idx:
+                    ch_idx = groups[int(gi.item())]
+                    x[b, :, ch_idx] = mask_value
+
+        else:
+            raise ValueError(f"Unknown eval_missing_protocol: {protocol}")
+
+        return x
 
     # -------------------------
     # build model
@@ -730,6 +860,99 @@ class Exp_Classification(Exp_Basic):
 
         return test_mse
 
+    @torch.no_grad()
+    def diagnose_vq_codebook(self, loader, split_name="TRAIN"):
+        """
+        Diagnose VQ codebook usage on a given data split.
+        This is used only for analysis and does not affect training.
+        """
+        self.model.eval()
+
+        m = _unwrap(self.model)
+
+        if not hasattr(m, "vq_net"):
+            self.log("[VQ-Diag] model has no vq_net, skip.")
+            self.model.train()
+            return None
+
+        if not hasattr(m, "num_primitives"):
+            self.log("[VQ-Diag] model has no num_primitives, skip.")
+            self.model.train()
+            return None
+
+        all_ids = []
+        K = int(m.num_primitives)
+
+        for batch_x, _, _ in loader:
+            batch_x = batch_x.float().to(self.device)
+
+            # Pad to VQ stride
+            x_pad, _ = _pad_to_multiple(batch_x, m.vq_stride, pad_value=0.0)
+
+            # Align to model.seq_len_pad
+            if x_pad.shape[1] != m.seq_len_pad:
+                if x_pad.shape[1] > m.seq_len_pad:
+                    x_pad = x_pad[:, :m.seq_len_pad, :]
+                else:
+                    pad_len = m.seq_len_pad - x_pad.shape[1]
+                    pad = x_pad.new_zeros(x_pad.size(0), pad_len, x_pad.size(-1))
+                    x_pad = torch.cat([x_pad, pad], dim=1)
+
+            ids = m.vq_net.get_token_ids(x_pad)  # [B, P]
+            ids = ids[:, :m.P]
+            all_ids.append(ids.reshape(-1).cpu())
+
+        if len(all_ids) == 0:
+            self.log(f"[VQ-Diag][{split_name}] empty ids, skip.")
+            self.model.train()
+            return None
+
+        all_ids = torch.cat(all_ids, dim=0)
+
+        hist = torch.bincount(all_ids, minlength=K).float()
+        total = hist.sum().clamp_min(1.0)
+        prob = hist / total
+
+        entropy = -(prob * (prob + 1e-8).log()).sum()
+        perplexity = torch.exp(entropy)
+        usage = (hist > 0).float().mean()
+        used_codes = int((hist > 0).sum().item())
+
+        top1_ratio = hist.topk(1).values.sum() / total
+        top5_ratio = hist.topk(min(5, K)).values.sum() / total
+        top10_ratio = hist.topk(min(10, K)).values.sum() / total
+        top50_ratio = hist.topk(min(50, K)).values.sum() / total
+
+        msg = (
+            f"\n========== VQ Codebook Diagnostics [{split_name}] ==========\n"
+            f"K                 : {K}\n"
+            f"used_codes        : {used_codes}/{K}\n"
+            f"usage             : {usage.item():.4f}\n"
+            f"perplexity        : {perplexity.item():.2f}\n"
+            f"perplexity / K    : {(perplexity / K).item():.4f}\n"
+            f"top1_ratio        : {top1_ratio.item():.4f}\n"
+            f"top5_ratio        : {top5_ratio.item():.4f}\n"
+            f"top10_ratio       : {top10_ratio.item():.4f}\n"
+            f"top50_ratio       : {top50_ratio.item():.4f}\n"
+            f"==========================================================\n"
+        )
+        self.log(msg)
+
+        stats = {
+            "split": split_name,
+            "K": K,
+            "used_codes": used_codes,
+            "usage": usage.item(),
+            "perplexity": perplexity.item(),
+            "perplexity_ratio": (perplexity / K).item(),
+            "top1_ratio": top1_ratio.item(),
+            "top5_ratio": top5_ratio.item(),
+            "top10_ratio": top10_ratio.item(),
+            "top50_ratio": top50_ratio.item(),
+        }
+
+        self.model.train()
+        return stats
     def pretrain(self, setting):
         if not self._is_two_stage_model():
             raise RuntimeError("pretrain called, but model is not two-stage.")
@@ -745,10 +968,12 @@ class Exp_Classification(Exp_Basic):
         improvement_threshold = 0.01
         patience = 2
 
-
-
         _, train_loader = self._get_data(flag="TRAIN")
         _, val_loader = self._get_data(flag="TEST")
+
+        if bool(getattr(self.args, "diagnose_vq", False)):
+            self.diagnose_vq_codebook(train_loader, split_name="TRAIN")
+            self.diagnose_vq_codebook(val_loader, split_name="VAL")
 
         paths = self._paths_for_setting(setting)
 
@@ -1024,6 +1249,9 @@ class Exp_Classification(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = self._to_bool_mask(padding_mask)
                 label = label.to(self.device)
+
+                if bool(getattr(self.args, "apply_eval_missing", 0)):
+                    batch_x = self._apply_missing_protocol(batch_x)
 
                 outputs = self._forward_classify(batch_x, padding_mask)  # logits [B, C]
                 target = label.long().view(-1)
@@ -1339,20 +1567,45 @@ class Exp_Classification(Exp_Basic):
             torch.cuda.synchronize()
         # infer_start = time.time()
         # folder_path = os.path.join("./results", setting)
-        folder_path = os.path.join(self.run_root, "stage2", "results", setting)
-        folder_path = to_secure_path(folder_path)  # 关键：这里加上 \\?\
+        protocol = str(getattr(self.args, "eval_missing_protocol", "clean")).lower()
+        ratio = float(getattr(self.args, "eval_missing_ratio", 0.0))
+        protocol_tag = f"{protocol}_r{ratio:.2f}".replace(".", "p")
+
+        folder_path = os.path.join(
+            self.run_root,
+            "stage2",
+            "results",
+            setting,
+            protocol_tag
+        )
+        folder_path = to_secure_path(folder_path)
 
         os.makedirs(folder_path, exist_ok=True)
 
+        old_apply_eval_missing = bool(getattr(self.args, "apply_eval_missing", 0))
+        setattr(self.args, "apply_eval_missing", True)
+
         test_loss, test_m = self.vali_classify(test_loader, criterion, save_dir=folder_path)
 
+        setattr(self.args, "apply_eval_missing", old_apply_eval_missing)
 
-
-        self.log(f"[Stage2-Test] loss:{test_loss:.6f} acc:{test_m['acc']:.6f} f1_macro:{test_m['f1_macro']:.6f} recall_macro:{test_m['recall_macro']:.6f} precision_macro:{test_m['precision_macro']:.6f} infer_total_time:{test_m['infer_total_time_s']:.6f} infer_ms_per_sample:{test_m['infer_ms_per_sample']:.6f} infer_samples_per_sec:{test_m['infer_samples_per_sec']:.6f} infer_total_samples:{test_m['infer_total_samples']}")
+        self.log(
+            f"[Stage2-Test][Missing={protocol}][Ratio={ratio:.2f}] "
+            f"loss:{test_loss:.6f} "
+            f"acc:{test_m['acc']:.6f} "
+            f"f1_macro:{test_m['f1_macro']:.6f} "
+            f"recall_macro:{test_m['recall_macro']:.6f} "
+            f"precision_macro:{test_m['precision_macro']:.6f} "
+            f"infer_total_time:{test_m['infer_total_time_s']:.6f} "
+            f"infer_ms_per_sample:{test_m['infer_ms_per_sample']:.6f} "
+            f"infer_samples_per_sec:{test_m['infer_samples_per_sec']:.6f} "
+            f"infer_total_samples:{test_m['infer_total_samples']}"
+        )
         self.log("------------------------------------------------------------------------------")
 
         with open(os.path.join(folder_path, "result_classification.txt"), "a", encoding="utf-8") as f:
             f.write(setting + "\n")
+            f.write(f"missing_protocol:{protocol} missing_ratio:{ratio:.2f}\n")
             f.write(
                 f"loss:{test_loss:.6f} "
                 f"acc:{test_m['acc']:.6f} "

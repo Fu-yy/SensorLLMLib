@@ -771,117 +771,25 @@ class IMU_VQ_Model(nn.Module):
             "L_pad": L_pad,
         }
 
-    @torch.no_grad()
-    def get_token_ids(
-        self,
-        features: Tensor,
-        padding_mask: Optional[Tensor] = None,
-        return_valid_mask: bool = False,
-    ):
+    def get_token_ids(self, features: Tensor):
         """
-        Convert IMU sequence into discrete VQ primitive ids.
-
-        Args:
-            features:
-                [B, L, C]
-            padding_mask:
-                Optional [B, L], True means valid.
-            return_valid_mask:
-                If True, return primitive-level valid mask [B, P].
-
-        Returns:
-            ids:
-                [B, P]
-            valid_patch_mask:
-                Optional [B, P], True means valid primitive position.
+        【重要】做 LLM 训练时用这个方法！
+        输入: IMU 数据 (Batch, Seq_Len, N_Var)
+        输出: Token ID 序列 (Batch, Seq_Len_Compressed)
         """
-        if features.dim() != 3:
-            raise ValueError(f"features should be [B, L, C], got {tuple(features.shape)}")
+        N, T, _ = features.shape
+        x_in = self.preprocess(features)
+        x_encoder = self.encoder(x_in)  # (B, C, T_compressed)
 
-        device = features.device
-        B, L, C = features.shape
+        # 调整形状以适应量化器
+        x_encoder = x_encoder.permute(0, 2, 1)  # (B, T_compressed, C)
+        x_encoder = x_encoder.contiguous().view(-1, x_encoder.shape[-1])  # (B*T, C)
 
-        multiple = 2 ** int(self.down_t)
-        x_pad, L_orig = _pad_to_multiple(features, multiple=multiple, pad_value=0.0)
-        L_pad = x_pad.shape[1]
-
-        if padding_mask is None:
-            mask = torch.ones((B, L_orig), device=device, dtype=torch.bool)
-        else:
-            mask = padding_mask.to(device).bool()
-
-        mask_pad = _pad_mask_to_len(mask, L_pad)
-
-        x_conv = self.preprocess(x_pad)          # [B, C, L_pad]
-        z = self.encoder(x_conv)                 # [B, D, P]
-        Bz, Dz, P = z.shape
-
-        z_flat = z.permute(0, 2, 1).contiguous().view(-1, Dz)  # [B*P, D]
-
-        code_idx = self.quantizer.quantize(z_flat)
-        code_idx = code_idx.view(B, P).long()
-
-        # primitive-level valid mask
-        # Since the temporal compression ratio is 2 ** down_t,
-        # each primitive roughly corresponds to this many raw time steps.
-        stride = multiple
-
-        valid_patch_mask = torch.zeros((B, P), device=device, dtype=torch.bool)
-
-        for p in range(P):
-            s = p * stride
-            e = min((p + 1) * stride, L_pad)
-            if s < L_pad:
-                valid_patch_mask[:, p] = mask_pad[:, s:e].any(dim=1)
-
-        if return_valid_mask:
-            return code_idx, valid_patch_mask
+        # 获取 ID
+        code_idx = self.quantizer.quantize(x_encoder)
+        code_idx = code_idx.view(N, -1)  # (B, T_compressed)
 
         return code_idx
-
-    @torch.no_grad()
-    def get_token_ids_with_mask(
-        self,
-        features: Tensor,
-        padding_mask: Optional[Tensor] = None,
-    ):
-        """
-        Safer wrapper for alignment/training.
-
-        Returns:
-            ids: [B, P]
-            valid_patch_mask: [B, P]
-        """
-        return self.get_token_ids(
-            features=features,
-            padding_mask=padding_mask,
-            return_valid_mask=True,
-        )
-
-    @torch.no_grad()
-    def decode_from_ids(self, ids: Tensor, crop_len: Optional[int] = None):
-        """
-        Decode primitive ids back to IMU sequence.
-
-        Args:
-            ids:
-                [B, P]
-            crop_len:
-                Optional target length after decoding.
-
-        Returns:
-            x_out:
-                [B, L, C]
-        """
-        x_d = self.quantizer.dequantize(ids)
-        x_d = x_d.view(ids.shape[0], -1, self.code_dim).permute(0, 2, 1).contiguous()
-        x_decoder = self.decoder(x_d)
-        x_out = self.postprocess(x_decoder)
-
-        if crop_len is not None:
-            x_out = x_out[:, :crop_len, :]
-
-        return x_out
 
     def decode_from_ids(self, ids: Tensor):
         """

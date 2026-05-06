@@ -15,16 +15,22 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, SequentialLR
 
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
+from utils.label_utils import get_label_names_from_cfg, get_id2label_from_cfg
 from utils.tools import EarlyStopping, cal_accuracy
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.metrics import confusion_matrix
 # 2) collect embeddings from TRAIN
 from sklearn.cluster import MiniBatchKMeans
 warnings.filterwarnings("ignore")
-
+from models_new_version_run.VQ_VAE import IMU_VQ_Model
+from models_new_version_run.primitive_profile_builder import build_primitive_profile
 # [新增] 全局辅助函数：处理 Windows 长路径
 import os
-
+from utils.primitive_profile import (
+    build_strong_primitive_profile,
+    get_label_names_from_cfg,
+    get_channel_names_from_cfg,
+)
 
 '''
 
@@ -199,11 +205,29 @@ class Exp_Alignment_Classification(Exp_Basic):
     """
 
     def __init__(self, args):
+        # 这些属性必须放在 super().__init__ 前面，
+        # 因为 Exp_Basic.__init__ 会调用 self._build_model()
+        self.logger = None
+
         self._inject_dataset_cfg(args)
+
+        run_id = getattr(args, "run_id", None)
+
+        dataset_key = str(
+            getattr(args, "dataset_key", getattr(args, "data", "data"))
+        ).lower()
+
+        self.run_root = os.path.join(
+            getattr(args, "run_root", "./runs"),
+            getattr(args, "model", "model"),
+            dataset_key,
+            str(run_id),
+        )
+        os.makedirs(self.run_root, exist_ok=True)
+
         super().__init__(args)
 
         # log_root = getattr(self.args, "log_dir", "./logs")
-        run_id = getattr(self.args, "run_id", None)
         # if not run_id:
         #     run_id = time.strftime("%Y%m%d_%H%M%S")
         #     setattr(self.args, "run_id", run_id)
@@ -211,17 +235,11 @@ class Exp_Alignment_Classification(Exp_Basic):
         # self.log_dir = os.path.join(log_root, getattr(self.args, "model", "model"), str(run_id))
         # os.makedirs(self.log_dir, exist_ok=True)
 
-        dataset_key = str(getattr(self.args, "dataset_key", getattr(self.args, "data", "data"))).lower()
-        self.run_root = os.path.join(getattr(self.args, "run_root", "./runs"),
-                                     getattr(self.args, "model", "model"),
-                                     dataset_key,
-                                     str(run_id))
-        os.makedirs(self.run_root, exist_ok=True)
+
 
         # self.log_dir = os.path.join(self.run_root, "logs")  # 统一日志
         # os.makedirs(self.log_dir, exist_ok=True)
 
-        self.logger = None
 
         # stage2 load stage1 if needed
         # if int(getattr(self.args, "stage", 2)) == 2:
@@ -233,23 +251,25 @@ class Exp_Alignment_Classification(Exp_Basic):
 
         self.diag_logits = bool(getattr(self.args, "diag_logits", False))
 
-        # V2 params (defaults)
-
-
         # scheduler controls
         if not hasattr(self.args, "use_cosine"):
             setattr(self.args, "use_cosine", True)
+
         if not hasattr(self.args, "cosine_by_iter"):
-            setattr(self.args, "cosine_by_iter", True)  # default iter-step cosine
+            setattr(self.args, "cosine_by_iter", True)
+
         if not hasattr(self.args, "monitor"):
-            setattr(self.args, "monitor", "acc")         # "acc" or "loss"
+            setattr(self.args, "monitor", "acc")
+
         if not hasattr(self.args, "use_class_weight"):
             setattr(self.args, "use_class_weight", True)
 
         if not hasattr(self.args, "weight_decay"):
             setattr(self.args, "weight_decay", 1e-4)
+
         if not hasattr(self.args, "min_lr"):
             setattr(self.args, "min_lr", 1e-5)
+
         if not hasattr(self.args, "warmup_epochs"):
             setattr(self.args, "warmup_epochs", 0)
 
@@ -304,6 +324,150 @@ class Exp_Alignment_Classification(Exp_Basic):
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
 
+    def _label_names_from_ds_cfg(self, ds_cfg):
+        """
+        Extract ordered label names from ds_cfg.
+
+        Supports:
+            label_names: list
+            id2label: dict with int or str keys
+        """
+        if not isinstance(ds_cfg, dict):
+            return None
+
+        if "label_names" in ds_cfg and ds_cfg["label_names"] is not None:
+            return [str(x) for x in ds_cfg["label_names"]]
+
+        if "id2label" in ds_cfg and ds_cfg["id2label"] is not None:
+            id2label = ds_cfg["id2label"]
+
+            if not isinstance(id2label, dict):
+                raise TypeError(f"ds_cfg['id2label'] should be dict, got {type(id2label)}")
+
+            normalized = {}
+
+            for k, v in id2label.items():
+                normalized[int(k)] = str(v)
+
+            num_class = int(ds_cfg.get("num_labels", len(normalized)))
+
+            missing = [i for i in range(num_class) if i not in normalized]
+
+            if len(missing) > 0:
+                raise ValueError(
+                    f"id2label missing ids: {missing}. "
+                    f"Available keys: {sorted(normalized.keys())}"
+                )
+
+            return [normalized[i] for i in range(num_class)]
+
+        return None
+
+    def _maybe_build_primitive_profile(self, train_loader):
+        """
+        Build strong primitive_profile.json before AlignmentModel is initialized.
+
+        This profile supports:
+            1. semantic primitive embedding for teacher,
+            2. interpretable primitive analysis in paper,
+            3. case study display.
+        """
+        if not bool(getattr(self.args, "auto_build_primitive_profile", False)):
+            return
+
+        ds_cfg = getattr(self.args, "ds_cfg", {})
+
+        vqvae_key = getattr(self.args, "vqvae_path", None)
+        qua_path = None
+
+        if vqvae_key is not None and isinstance(ds_cfg, dict):
+            qua_path = ds_cfg.get(vqvae_key, None)
+
+        if qua_path is None:
+            qua_path = getattr(self.args, "vqvae_ckpt_dir", None)
+
+        if qua_path is None:
+            raise ValueError(
+                "Cannot build primitive profile because VQ-VAE checkpoint dir is unknown. "
+                "Set args.vqvae_path or args.vqvae_ckpt_dir."
+            )
+
+        vq_ckpt_path = os.path.join(qua_path, "best_wrapper.pth")
+
+        if not os.path.exists(vq_ckpt_path):
+            raise FileNotFoundError(f"VQ-VAE checkpoint not found: {vq_ckpt_path}")
+
+        save_path = os.path.join(qua_path, "primitive_profile_strong.json")
+
+        # If user manually provides a profile, use it.
+        if getattr(self.args, "primitive_profile_path", None) is not None:
+            if os.path.exists(self.args.primitive_profile_path):
+                self.log(f"[PrimitiveProfile] existing user profile: {self.args.primitive_profile_path}")
+                return
+
+        # Default behavior:
+        # If strong profile already exists, reuse it.
+        # To regenerate, delete the json or set force_build_primitive_profile=1.
+        force_build = bool(getattr(self.args, "force_build_primitive_profile", False))
+
+        if os.path.exists(save_path) and not force_build:
+            self.log(f"[PrimitiveProfile] existing strong profile: {save_path}")
+            self.args.primitive_profile_path = save_path
+            return
+
+        self.log(f"[PrimitiveProfile] building strong profile from VQ-VAE: {vq_ckpt_path}")
+        self.log(f"[PrimitiveProfile] save to: {save_path}")
+
+        vq_model = IMU_VQ_Model(self.args)
+
+        sd = torch.load(vq_ckpt_path, map_location="cpu")
+
+        if isinstance(sd, dict) and "state_dict" in sd:
+            sd = sd["state_dict"]
+
+        vq_model.load_state_dict(sd, strict=True)
+        vq_model.to(self.device)
+        vq_model.eval()
+
+        num_class = int(
+            ds_cfg.get(
+                "num_labels",
+                getattr(self.args, "num_class", 12),
+            )
+        )
+
+        label_names = get_label_names_from_cfg(
+            ds_cfg,
+            num_class=num_class,
+        )
+
+        channel_num = int(
+            ds_cfg.get(
+                "channel_num",
+                getattr(self.args, "enc_in", 0),
+            )
+        )
+
+        channel_names = get_channel_names_from_cfg(
+            ds_cfg,
+            channel_num=channel_num,
+        )
+
+        build_strong_primitive_profile(
+            vq_model=vq_model,
+            dataloader=train_loader,
+            save_path=save_path,
+            device=self.device,
+            num_codes=int(getattr(vq_model, "code_num", 512)),
+            label_names=label_names,
+            channel_names=channel_names,
+            max_batches=getattr(self.args, "primitive_profile_max_batches", None),
+            keep_examples_per_code=int(getattr(self.args, "primitive_profile_examples", 5)),
+            min_valid_ratio_per_token=float(getattr(self.args, "primitive_profile_min_valid_ratio", 0.5)),
+            include_meta=True,
+        )
+
+        self.args.primitive_profile_path = save_path
     # -------------------------
     # config injection
     # -------------------------
@@ -313,43 +477,93 @@ class Exp_Alignment_Classification(Exp_Basic):
             return
 
         project_path = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
-        config_path = os.path.join(project_path, "configs", ts_yaml)
+
+        if os.path.exists(ts_yaml):
+            config_path = ts_yaml
+        else:
+            config_path = os.path.join(project_path, "configs", ts_yaml)
+
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"ts_backbone_yaml not found: {config_path}")
 
-        dataset_key = str( getattr(args, "data")).lower()
+        dataset_key = str(getattr(args, "data")).lower()
+
         with open(config_path, "r", encoding="utf-8") as f:
             cfg_all = yaml.safe_load(f)
+
         if dataset_key not in cfg_all:
             raise KeyError(f"dataset '{dataset_key}' not found in {config_path}")
 
         ds_cfg = cfg_all[dataset_key]
+
         args.dataset_key = dataset_key
         args.ds_cfg = ds_cfg
 
         if "channel_num" in ds_cfg:
             args.enc_in = int(ds_cfg["channel_num"])
+
         if "sample_rate" in ds_cfg:
             args.sample_rate = int(ds_cfg["sample_rate"])
+
         if "num_labels" in ds_cfg:
             args.num_class = int(ds_cfg["num_labels"])
 
+        # ------------------------------------------------------------
+        # New: inject id2label / label_names
+        # ------------------------------------------------------------
+        # if "id2label" in ds_cfg and ds_cfg["id2label"] is not None:
+        #     id2label_raw = ds_cfg["id2label"]
+        #
+        #     if not isinstance(id2label_raw, dict):
+        #         raise TypeError(f"ds_cfg['id2label'] should be dict, got {type(id2label_raw)}")
+        #
+        #     id2label = {int(k): str(v) for k, v in id2label_raw.items()}
+        #     args.id2label = id2label
+        #
+        #     num_class = int(ds_cfg.get("num_labels", len(id2label)))
+        #     missing = [i for i in range(num_class) if i not in id2label]
+        #
+        #     if len(missing) > 0:
+        #         raise ValueError(
+        #             f"id2label missing ids: {missing}. "
+        #             f"Available keys: {sorted(id2label.keys())}"
+        #         )
+        #
+        #     args.label_names = [id2label[i] for i in range(num_class)]
+        #
+        # elif "label_names" in ds_cfg and ds_cfg["label_names"] is not None:
+        #     args.label_names = [str(x) for x in ds_cfg["label_names"]]
+        #     args.id2label = {i: x for i, x in enumerate(args.label_names)}
+
+        args.label_names = get_label_names_from_cfg(ds_cfg, num_class=args.num_class)
+        args.id2label = get_id2label_from_cfg(ds_cfg, num_class=args.num_class)
     def _is_two_stage_model(self) -> bool:
         if hasattr(self.args, "two_stage"):
             return bool(getattr(self.args, "two_stage"))
+
         name = str(getattr(self.args, "model", "")).lower()
         m = _unwrap(self.model)
+
+        # 新的 primitive-language teacher
+        if hasattr(m, "teacher_core") and hasattr(m.teacher_core, "llm"):
+            return True
+
+        if hasattr(m, "vq_net") and hasattr(m, "classify"):
+            return True
+
+        # 旧的 SensorLLM 风格
         if "sensorllm" in name:
             return True
+
         if hasattr(m, "llm") and hasattr(m, "tokenizer"):
             return True
-        return False
 
+        return False
     # -------------------------
     # build model
     # -------------------------
     def _build_model(self):
-        train_data, _ = self._get_data(flag="TRAIN")
+        train_data, train_loader = self._get_data(flag="TRAIN")
         val_data, _ = self._get_data(flag="TEST")
         test_data, _ = self._get_data(flag="TEST")
 
@@ -364,8 +578,10 @@ class Exp_Alignment_Classification(Exp_Basic):
             self.args.enc_in = int(self.args.ds_cfg.get("channel_num", self.args.enc_in))
             self.args.num_class = int(self.args.ds_cfg.get("num_labels", getattr(self.args, "num_class", 12)))
 
-        model = self.model_dict[self.args.model].AlignmentModel(self.args).float()
+        # Important: primitive profile should be prepared before AlignmentModel init.
+        self._maybe_build_primitive_profile(train_loader)
 
+        model = self.model_dict[self.args.model].AlignmentModel(self.args)
 
         return model
 
@@ -486,42 +702,134 @@ class Exp_Alignment_Classification(Exp_Basic):
     #     self.log(f"[trainable] {n_train}/{n_all} = {100*n_train/n_all:.2f}%")
 
     def set_trainable_modules(self):
+        """
+        Set trainable parameters for the primitive-language teacher.
+
+        Stage1:
+            Train primitive recovery + activity classification adapters.
+
+        Stage2:
+            Fine-tune clean primitive classification.
+            Default: train activity_head only.
+            Optional: train adapter_all.
+        """
         if not self._is_two_stage_model():
             return
 
         m = _unwrap(self.model)
 
-        # 1) 先全部冻结（包括 wrapper 所有外挂）
+        # ============================================================
+        # New primitive-language teacher
+        # ============================================================
+        if hasattr(m, "teacher_core"):
+            tc = m.teacher_core
+
+            # First freeze everything.
+            for p in m.parameters():
+                p.requires_grad = False
+
+            # LLM always frozen.
+            if hasattr(tc, "llm"):
+                for p in tc.llm.parameters():
+                    p.requires_grad = False
+
+            stage = int(getattr(self.args, "stage", getattr(m, "stage", 1)))
+
+            # ------------------------------------------------------------
+            # Stage1: multi-task teacher alignment
+            # ------------------------------------------------------------
+            if stage == 1:
+                # This method should unfreeze:
+                # projector / output_head / activity_head / mask / pos / query
+                tc.freeze_llm_only()
+
+            # ------------------------------------------------------------
+            # Stage2: clean classification fine-tuning
+            # ------------------------------------------------------------
+            else:
+                stage2_trainable = str(
+                    getattr(self.args, "stage2_trainable", "activity_only")
+                ).lower()
+
+                if stage2_trainable == "activity_only":
+                    if getattr(tc, "activity_head", None) is None:
+                        raise RuntimeError("teacher_core.activity_head is None. Please pass num_classes to teacher.")
+
+                    for p in tc.activity_head.parameters():
+                        p.requires_grad = True
+
+                elif stage2_trainable == "adapter_all":
+                    for p in tc.projector.parameters():
+                        p.requires_grad = True
+
+                    for p in tc.output_head.parameters():
+                        p.requires_grad = True
+
+                    if getattr(tc, "activity_head", None) is not None:
+                        for p in tc.activity_head.parameters():
+                            p.requires_grad = True
+
+                    tc.mask_embed_llama.requires_grad_(True)
+                    tc.primitive_pos_embed.requires_grad_(True)
+                    tc.query_embed.requires_grad_(True)
+
+                elif stage2_trainable == "activity_projector":
+                    for p in tc.projector.parameters():
+                        p.requires_grad = True
+
+                    if getattr(tc, "activity_head", None) is not None:
+                        for p in tc.activity_head.parameters():
+                            p.requires_grad = True
+
+                else:
+                    raise ValueError(
+                        f"Unknown stage2_trainable={stage2_trainable}. "
+                        "Use activity_only / activity_projector / adapter_all."
+                    )
+
+            n_train = sum(p.numel() for p in m.parameters() if p.requires_grad)
+            n_all = sum(p.numel() for p in m.parameters())
+
+            self.log(f"[trainable] {n_train}/{n_all} = {100 * n_train / max(n_all, 1):.4f}%")
+
+            trainable_names = [
+                                  n for n, p in m.named_parameters() if p.requires_grad
+                              ][:80]
+
+            self.log("[trainable-names]\n" + "\n".join(trainable_names))
+
+            if n_train == 0:
+                raise RuntimeError("No trainable params. Check teacher_core and stage setting.")
+
+            return
+
+        # ============================================================
+        # Fallback: old two-stage model
+        # ============================================================
         for p in m.parameters():
             p.requires_grad = False
 
-        # 2) LLM 永久冻结（如果你就是这个策略）
         if hasattr(m, "llm"):
             for p in m.llm.parameters():
                 p.requires_grad = False
 
-        # 3) 用“参数名前缀”来解冻：最稳，不怕模块被替换
         tm = str(getattr(self.args, "trainable_modules", "")).strip()
         allow = [x.strip() for x in tm.split(",") if x.strip()]
+
         if not allow:
-            # 这里写你模型真实存在的外挂名字
             allow = [
                 "sensor_patch_proj",
                 "channel_id",
-                "pos_mlp",
+                "patch_pos",
                 "mask_embed",
-                "resampler",
-                "recon_decoder",
-                "dec_attn",
                 "recon_head",
+                "cls_head",
                 "pool_query",
                 "pool_attn",
-                "cls_head",
             ]
-            allow = ["sensor_patch_proj", "channel_id", "patch_pos", "mask_embed", "recon_head", "cls_head", "pool_query", "pool_attn"]
 
-        # 4) 解冻：只要参数名以这些前缀开头就放行
         hit = {k: 0 for k in allow}
+
         for n, p in m.named_parameters():
             for k in allow:
                 if (n == k) or n.startswith(k + ".") or (("." + k + ".") in n):
@@ -529,44 +837,95 @@ class Exp_Alignment_Classification(Exp_Basic):
                     hit[k] += p.numel()
                     break
 
-        # 5) 强诊断
         self.log("[trainable-hit] " + ", ".join([f"{k}:{hit[k] / 1e6:.3f}M" for k in allow]))
+
         n_train = sum(p.numel() for p in m.parameters() if p.requires_grad)
         n_all = sum(p.numel() for p in m.parameters())
-        self.log(f"[trainable] {n_train}/{n_all} = {100 * n_train / n_all:.4f}%")
 
-        # 如果 0，直接报错并打印一些参数名方便你改 allow
+        self.log(f"[trainable] {n_train}/{n_all} = {100 * n_train / max(n_all, 1):.4f}%")
+
         if n_train == 0:
             names = [n for n, _ in list(m.named_parameters())[:200]]
-            self.log("[trainable][error] n_train == 0, allow=" + ",".join(allow))
             self.log("[trainable][error] first-200 param names:\n" + "\n".join(names))
-            raise RuntimeError("No trainable params after set_trainable_modules(). Check allow names / nesting.")
-
+            raise RuntimeError("No trainable params after set_trainable_modules().")
     # -------------------------
     # forward wrappers
     # -------------------------
     def _forward_classify(self, batch_x, padding_mask):
+        """
+        Return activity logits [B, num_class].
+        """
+        m = _unwrap(self.model)
+
+        if hasattr(m, "classify"):
+            logits, probs = m.classify(batch_x, padding_mask=padding_mask)
+
+            if logits is None:
+                raise RuntimeError(
+                    "model.classify() returned None logits. "
+                    "Please check whether teacher_core.activity_head is enabled."
+                )
+
+            if logits.dim() != 2:
+                raise RuntimeError(f"classify logits must be [B,num_class], got {tuple(logits.shape)}")
+
+            if self.model.training and not logits.requires_grad:
+                raise RuntimeError(
+                    "classify logits does not require grad during training. "
+                    "This usually means classify() contains @torch.no_grad(), "
+                    "with torch.no_grad(), logits.detach(), or trainable modules "
+                    "are not used in the classify forward path."
+                )
+
+            return logits
+
         if self._is_two_stage_model():
             out = self.model(batch_x, padding_mask, mode="classify")
         else:
             out = self.model(batch_x, padding_mask, None, None)
+
         if isinstance(out, (tuple, list)):
             out = out[0]
+
         if out.dim() != 2:
             raise RuntimeError(f"classify output must be [B,num_class], got {tuple(out.shape)}")
-        return out
 
-    def _forward_pretrain_loss(self, batch_x, padding_mask):
+        if self.model.training and not out.requires_grad:
+            raise RuntimeError(
+                "classify output does not require grad during training."
+            )
+
+        return out
+    def _forward_pretrain_loss(self, batch_x, padding_mask, labels=None):
+        """
+        Stage1 teacher alignment.
+
+        New objective:
+            loss = loss_primitive + lambda_activity * loss_activity
+
+        Therefore labels should be passed whenever available.
+        """
         if not self._is_two_stage_model():
-            raise RuntimeError("This model does not support pretrain stage.")
-        out = self.model(batch_x, padding_mask, mode="pretrain")
-        if not isinstance(out, (tuple, list)) or len(out) < 1:
-            raise RuntimeError("pretrain forward must return (loss_mse, ...)")
-        loss_mse = out[0]
-        if not torch.is_tensor(loss_mse) or loss_mse.dim() != 0:
-            raise RuntimeError(f"loss_mse must be scalar tensor, got {type(loss_mse)} shape={getattr(loss_mse,'shape',None)}")
-        return out
+            raise RuntimeError("This model does not support pretrain/alignment stage.")
 
+        out = self.model(
+            batch_x,
+            padding_mask,
+            mode="train",
+            labels=labels,
+        )
+
+        if not isinstance(out, (tuple, list)) or len(out) < 1:
+            raise RuntimeError("alignment forward must return (loss, logits, metrics).")
+
+        loss = out[0]
+
+        if not torch.is_tensor(loss) or loss.dim() != 0:
+            raise RuntimeError(
+                f"loss must be scalar tensor, got {type(loss)} shape={getattr(loss, 'shape', None)}"
+            )
+
+        return out
     def log(self, msg: str):
         if self.logger is not None:
             self.logger.write(msg, also_print=True)
@@ -604,11 +963,13 @@ class Exp_Alignment_Classification(Exp_Basic):
         wd = float(getattr(self.args, "weight_decay", 1e-2))
 
         decay, no_decay = [], []
+
         for n, p in self.model.named_parameters():
             if not p.requires_grad:
                 continue
+
             nn_ = n.lower()
-            # safe no_decay rule
+
             if n.endswith("bias") or ("norm" in nn_) or (".bn" in nn_) or ("layernorm" in nn_):
                 no_decay.append(p)
             elif ("embedding" in nn_) or nn_.endswith("embed") or ("_embed" in nn_) or ("embed_" in nn_):
@@ -616,12 +977,21 @@ class Exp_Alignment_Classification(Exp_Basic):
             else:
                 decay.append(p)
 
-        groups = [
-            {"params": decay, "lr": lr, "weight_decay": wd},
-            {"params": no_decay, "lr": lr, "weight_decay": 0.0},
-        ]
+        if len(decay) + len(no_decay) == 0:
+            names = [n for n, _ in list(self.model.named_parameters())[:200]]
+            self.log("[optimizer][error] no trainable parameters.")
+            self.log("[optimizer][param names]\n" + "\n".join(names))
+            raise RuntimeError("No trainable parameters for optimizer.")
+
+        groups = []
+
+        if len(decay) > 0:
+            groups.append({"params": decay, "lr": lr, "weight_decay": wd})
+
+        if len(no_decay) > 0:
+            groups.append({"params": no_decay, "lr": lr, "weight_decay": 0.0})
+
         opt = optim.RAdam(groups, lr=lr)
-        # opt = optim.AdamW(groups, lr=lr, betas=(0.9, 0.999))
 
         return opt
 
@@ -696,42 +1066,133 @@ class Exp_Alignment_Classification(Exp_Basic):
     # ============================================================
     def pretrain_vali(self, loader):
         self.model.eval()
-        losses = []
-        with torch.no_grad():
-            for batch_x, _, padding_mask in loader:
-                batch_x = batch_x.float().to(self.device)
-                padding_mask = self._to_bool_mask(padding_mask)
-                out = self._forward_pretrain_loss(batch_x, padding_mask)
-                loss_mse = out[0]
 
-                losses.append(float(loss_mse.item()))
+        losses = []
+        loss_prims = []
+        loss_acts = []
+
+        primitive_accs = []
+        primitive_entropy_norms = []
+        primitive_confs = []
+        activity_accs = []
+        mask_ratios = []
+
+        with torch.no_grad():
+            for batch_x, label, padding_mask in loader:
+                batch_x = batch_x.float().to(self.device)
+                label = label.to(self.device).long()
+                padding_mask = self._to_bool_mask(padding_mask)
+
+                out = self._forward_pretrain_loss(
+                    batch_x,
+                    padding_mask,
+                    labels=label,
+                )
+
+                loss = out[0]
+                info = out[2] if isinstance(out, (tuple, list)) and len(out) > 2 and isinstance(out[2], dict) else {}
+
+                losses.append(float(loss.item()))
+
+                if "loss_primitive" in info:
+                    loss_prims.append(float(info["loss_primitive"]))
+                if "loss_activity" in info:
+                    loss_acts.append(float(info["loss_activity"]))
+
+                if "primitive_acc" in info:
+                    primitive_accs.append(float(info["primitive_acc"]))
+                if "primitive_entropy_norm" in info:
+                    primitive_entropy_norms.append(float(info["primitive_entropy_norm"]))
+                if "primitive_conf" in info:
+                    primitive_confs.append(float(info["primitive_conf"]))
+                if "activity_acc" in info:
+                    activity_accs.append(float(info["activity_acc"]))
+                if "mask_ratio_actual" in info:
+                    mask_ratios.append(float(info["mask_ratio_actual"]))
+
         self.model.train()
-        return float(np.mean(losses)) if len(losses) else 0.0
+
+        metrics = {
+            "loss": float(np.mean(losses)) if len(losses) else 0.0,
+            "loss_primitive": float(np.mean(loss_prims)) if len(loss_prims) else 0.0,
+            "loss_activity": float(np.mean(loss_acts)) if len(loss_acts) else 0.0,
+            "primitive_acc": float(np.mean(primitive_accs)) if len(primitive_accs) else 0.0,
+            "primitive_entropy_norm": float(np.mean(primitive_entropy_norms)) if len(primitive_entropy_norms) else 0.0,
+            "primitive_conf": float(np.mean(primitive_confs)) if len(primitive_confs) else 0.0,
+            "activity_acc": float(np.mean(activity_accs)) if len(activity_accs) else 0.0,
+            "mask_ratio_actual": float(np.mean(mask_ratios)) if len(mask_ratios) else 0.0,
+        }
+
+        return metrics
 
     def pretrain_test(self, setting, test=0):
         if not self._is_two_stage_model():
             raise RuntimeError("Stage1 test called, but model is not two-stage.")
+
+        paths = self._paths_for_setting(setting)
+
         if test:
-            self._maybe_load_stage1_hf()
+            wrapper_path = paths["stage1_wrapper"]
+            wrapper_path = to_secure_path(wrapper_path)
+
+            if os.path.exists(wrapper_path):
+                self.log(f"[load] stage1 wrapper from: {wrapper_path}")
+                m = _unwrap(self.model)
+                if hasattr(m, "load_wrapper"):
+                    m.load_wrapper(wrapper_path, map_location=self.device)
+                else:
+                    sd = torch.load(wrapper_path, map_location=self.device)
+                    m.load_state_dict(sd, strict=False)
+            else:
+                self.log(f"[warn] stage1 wrapper not found: {wrapper_path}")
 
         _, test_loader = self._get_data(flag="TEST")
-        test_mse = self.pretrain_vali(test_loader)
+        test_m = self.pretrain_vali(test_loader)
 
-        # folder_path = os.path.join("./results_pretrain", setting)
         folder_path = os.path.join(self.run_root, "stage1", "results", setting)
         folder_path = to_secure_path(folder_path)
 
         os.makedirs(folder_path, exist_ok=True)
 
-        self.log(f"[Stage1-Test] test_mse={test_mse:.6f}")
+        criterion = self._select_criterion(train_loader=None)
+        clean_loss, clean_m = self.vali_classify(test_loader, criterion)
+
+        self.log(
+            f"[Stage1-CleanClassify-Test] "
+            f"loss={clean_loss:.6f} "
+            f"acc={clean_m['acc']:.6f} "
+            f"f1_macro={clean_m['f1_macro']:.6f} "
+            f"recall_macro={clean_m['recall_macro']:.6f} "
+            f"precision_macro={clean_m['precision_macro']:.6f}"
+        )
+
+        self.log(
+            f"[Stage1-Test] "
+            f"loss={test_m['loss']:.6f} "
+            f"loss_prim={test_m['loss_primitive']:.6f} "
+            f"loss_act={test_m['loss_activity']:.6f} "
+            f"prim_acc={test_m['primitive_acc']:.4f} "
+            f"act_acc={test_m['activity_acc']:.4f} "
+            f"prim_ent={test_m['primitive_entropy_norm']:.4f} "
+            f"prim_conf={test_m['primitive_conf']:.4f} "
+            f"mask_ratio={test_m['mask_ratio_actual']:.4f}"
+        )
         self.log("---------------------------------------------------------------------------------------")
 
-        with open(os.path.join(folder_path, "result_pretrain_mse.txt"), "a", encoding="utf-8") as f:
+        with open(os.path.join(folder_path, "result_pretrain.txt"), "a", encoding="utf-8") as f:
             f.write(setting + "\n")
-            f.write(f"test_mse:{test_mse:.6f}\n\n")
+            f.write(
+                f"loss:{test_m['loss']:.6f} "
+                f"loss_primitive:{test_m['loss_primitive']:.6f} "
+                f"loss_activity:{test_m['loss_activity']:.6f} "
+                f"primitive_acc:{test_m['primitive_acc']:.6f} "
+                f"activity_acc:{test_m['activity_acc']:.6f} "
+                f"primitive_entropy_norm:{test_m['primitive_entropy_norm']:.6f} "
+                f"primitive_conf:{test_m['primitive_conf']:.6f} "
+                f"mask_ratio_actual:{test_m['mask_ratio_actual']:.6f}\n\n"
+            )
 
-        return test_mse
-
+        return test_m
     def pretrain(self, setting):
         if not self._is_two_stage_model():
             raise RuntimeError("pretrain called, but model is not two-stage.")
@@ -780,26 +1241,56 @@ class Exp_Alignment_Classification(Exp_Basic):
 
         for epoch in range(self.args.train_epochs):
             self.model.train()
-            tr = []
+            tr_losses = []
+            tr_loss_prims = []
+            tr_loss_acts = []
 
-            for batch_x, _, padding_mask in train_loader:
+            tr_primitive_accs = []
+            tr_activity_accs = []
+            tr_primitive_entropy_norms = []
+            tr_primitive_confs = []
+            tr_mask_ratios = []
+
+            for batch_x, label, padding_mask in train_loader:
                 opt.zero_grad()
+
                 batch_x = batch_x.float().to(self.device)
+                label = label.to(self.device).long()
                 padding_mask = self._to_bool_mask(padding_mask)
 
-                out = self._forward_pretrain_loss(batch_x, padding_mask)
-                loss_mse = out[0]
-                # val_perplexity = out[-1]["perplexity"]
-                loss_mse.backward()
+                out = self._forward_pretrain_loss(
+                    batch_x,
+                    padding_mask,
+                    labels=label,
+                )
+
+                loss = out[0]
+                info = out[2] if isinstance(out, (tuple, list)) and len(out) > 2 and isinstance(out[2], dict) else {}
+
+                loss.backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
                 opt.step()
 
-                # iter-step scheduler
                 if scheduler is not None and bool(getattr(self.args, "cosine_by_iter", False)):
                     scheduler.step()
 
-                tr.append(float(loss_mse.item()))
+                tr_losses.append(float(loss.item()))
 
+                if "loss_primitive" in info:
+                    tr_loss_prims.append(float(info["loss_primitive"]))
+                if "loss_activity" in info:
+                    tr_loss_acts.append(float(info["loss_activity"]))
+
+                if "primitive_acc" in info:
+                    tr_primitive_accs.append(float(info["primitive_acc"]))
+                if "activity_acc" in info:
+                    tr_activity_accs.append(float(info["activity_acc"]))
+                if "primitive_entropy_norm" in info:
+                    tr_primitive_entropy_norms.append(float(info["primitive_entropy_norm"]))
+                if "primitive_conf" in info:
+                    tr_primitive_confs.append(float(info["primitive_conf"]))
+                if "mask_ratio_actual" in info:
+                    tr_mask_ratios.append(float(info["mask_ratio_actual"]))
             # epoch-step scheduler
             if scheduler is not None and not bool(getattr(self.args, "cosine_by_iter", False)):
                 if isinstance(scheduler, dict):
@@ -811,18 +1302,64 @@ class Exp_Alignment_Classification(Exp_Basic):
                 else:
                     scheduler.step()
 
-            train_mse = float(np.mean(tr)) if len(tr) else 0.0
-            val_mse = self.pretrain_vali(val_loader)
+            train_loss = float(np.mean(tr_losses)) if len(tr_losses) else 0.0
+            train_loss_primitive = float(np.mean(tr_loss_prims)) if len(tr_loss_prims) else 0.0
+            train_loss_activity = float(np.mean(tr_loss_acts)) if len(tr_loss_acts) else 0.0
+
+            train_primitive_acc = float(np.mean(tr_primitive_accs)) if len(tr_primitive_accs) else 0.0
+            train_activity_acc = float(np.mean(tr_activity_accs)) if len(tr_activity_accs) else 0.0
+            train_primitive_entropy_norm = float(np.mean(tr_primitive_entropy_norms)) if len(
+                tr_primitive_entropy_norms) else 0.0
+            train_primitive_conf = float(np.mean(tr_primitive_confs)) if len(tr_primitive_confs) else 0.0
+            train_mask_ratio = float(np.mean(tr_mask_ratios)) if len(tr_mask_ratios) else 0.0
+
+            val_m = self.pretrain_vali(val_loader)
+            val_loss = val_m["loss"]
+            val_loss_primitive = val_m["loss_primitive"]
+            val_loss_activity = val_m["loss_activity"]
+
+            val_primitive_acc = val_m["primitive_acc"]
+            val_activity_acc = val_m["activity_acc"]
+            val_primitive_entropy_norm = val_m["primitive_entropy_norm"]
+            val_primitive_conf = val_m["primitive_conf"]
+            val_mask_ratio = val_m["mask_ratio_actual"]
+
             self._log_lrs(opt, f"[LR] epoch={epoch + 1}")
 
-            self.log(f"[Stage1-Pretrain] epoch={epoch + 1} train_mse={train_mse:.6f} val_mse={val_mse:.6f}")
-
+            self.log(
+                f"[Stage1-PrimitiveTeacher] epoch={epoch + 1} | "
+                f"train_loss={train_loss:.6f} "
+                f"train_prim_loss={train_loss_primitive:.6f} "
+                f"train_act_loss={train_loss_activity:.6f} "
+                f"train_prim_acc={train_primitive_acc:.4f} "
+                f"train_act_acc={train_activity_acc:.4f} "
+                f"train_ent={train_primitive_entropy_norm:.4f} "
+                f"train_conf={train_primitive_conf:.4f} "
+                f"train_mask={train_mask_ratio:.4f} | "
+                f"val_loss={val_loss:.6f} "
+                f"val_prim_loss={val_loss_primitive:.6f} "
+                f"val_act_loss={val_loss_activity:.6f} "
+                f"val_prim_acc={val_primitive_acc:.4f} "
+                f"val_act_acc={val_activity_acc:.4f} "
+                f"val_ent={val_primitive_entropy_norm:.4f} "
+                f"val_conf={val_primitive_conf:.4f} "
+                f"val_mask={val_mask_ratio:.4f}"
+            )
             # ----------------------------
             # save best wrapper
             # ----------------------------
             # if best_val is None or val_mse < best_val:
-            if best_val is None or val_mse < best_val:
-                best_val = val_mse
+
+            pretrain_monitor = str(getattr(self.args, "pretrain_monitor", "loss")).lower()
+
+            if pretrain_monitor == "activity_acc":
+                current_val = -float(val_activity_acc)
+            elif pretrain_monitor == "primitive_acc":
+                current_val = -float(val_primitive_acc)
+            else:
+                current_val = float(val_loss)
+            if best_val is None or current_val < best_val:
+                best_val = current_val
 
                 m = _unwrap(self.model)
                 wrapper_path = os.path.join(save_root, "best_wrapper.pth")
@@ -839,8 +1376,14 @@ class Exp_Alignment_Classification(Exp_Basic):
 
                 with open(status_path, "w", encoding="utf-8") as f:
                     json.dump({
+                        "pretrain_monitor": pretrain_monitor,
                         "best_val": float(best_val),
                         "best_epoch": int(epoch + 1),
+                        "val_loss": float(val_loss),
+                        "val_loss_primitive": float(val_loss_primitive),
+                        "val_loss_activity": float(val_loss_activity),
+                        "val_primitive_acc": float(val_primitive_acc),
+                        "val_activity_acc": float(val_activity_acc),
                         "artifact_path": paths["stage1_wrapper"],
                         "wrapper_path": wrapper_path,
                         "artifact_exists": os.path.exists(paths["stage1_wrapper"]),
@@ -866,8 +1409,8 @@ class Exp_Alignment_Classification(Exp_Basic):
             for batch_x, label, padding_mask in loader:
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = self._to_bool_mask(padding_mask)
-                label = label.to(self.device)
-
+                # label = label.to(self.device)
+                label = label.to(self.device).long().view(-1)
                 outputs = self._forward_classify(batch_x, padding_mask)  # logits [B, C]
                 target = label.long().view(-1)
                 # label_test= label.long().squeeze(-1)
@@ -994,9 +1537,9 @@ class Exp_Alignment_Classification(Exp_Basic):
             self.log(f"[auto-load][warn] no stage1 found under: {save_root}")
 
         self.args.stage = 2
-        # m = _unwrap(self.model)
-        # if hasattr(m, "stage"):
-        #     m.stage = 2
+        m = _unwrap(self.model)
+        if hasattr(m, "stage"):
+            m.stage = 2
 
         _, train_loader = self._get_data(flag="TRAIN")
         _, val_loader = self._get_data(flag="TEST")
