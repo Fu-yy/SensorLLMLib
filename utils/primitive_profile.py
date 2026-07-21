@@ -478,6 +478,7 @@ def make_description(
     stats: Dict[str, Any],
     label_distribution: List[Dict[str, Any]],
     quantiles: Dict[str, Tuple[float, float]],
+    include_label_association: bool = True,
 ):
     if count <= 0:
         return "an unused motion primitive in the current training split"
@@ -525,19 +526,22 @@ def make_description(
         ("spectrally concentrated", "moderately broadband", "spectrally complex"),
     )
 
-    if len(label_distribution) == 0:
-        label_part = "without a reliable activity association"
+    if not include_label_association:
+        label_part = "without using activity-label association"
     else:
-        top = label_distribution[0]
-        label_name = top["label_name"]
-        ratio = safe_float(top["ratio"])
-
-        if purity < 0.35:
-            label_part = f"shared across multiple activities, with weak association to {label_name} ({ratio:.2f})"
-        elif purity < 0.55:
-            label_part = f"moderately associated with {label_name} ({ratio:.2f})"
+        if len(label_distribution) == 0:
+            label_part = "without a reliable activity association"
         else:
-            label_part = f"strongly associated with {label_name} ({ratio:.2f})"
+            top = label_distribution[0]
+            label_name = top["label_name"]
+            ratio = safe_float(top["ratio"])
+
+            if purity < 0.35:
+                label_part = f"shared across multiple activities, with weak association to {label_name} ({ratio:.2f})"
+            elif purity < 0.55:
+                label_part = f"moderately associated with {label_name} ({ratio:.2f})"
+            else:
+                label_part = f"strongly associated with {label_name} ({ratio:.2f})"
 
     return (
         f"a {support}, {intensity}, {dynamics}, {periodic} motion primitive, "
@@ -608,6 +612,7 @@ def build_strong_primitive_profile(
     keep_examples_per_code: int = 5,
     min_valid_ratio_per_token: float = 0.5,
     include_meta: bool = True,
+    include_label_association: bool = True,
 ):
     """
     Generate a strong primitive profile JSON for paper-level interpretability.
@@ -635,8 +640,9 @@ def build_strong_primitive_profile(
           ...
         }
     """
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
+    save_dir = os.path.dirname(save_path)
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
     if max_batches is not None:
         max_batches = int(max_batches)
         if max_batches <= 0:
@@ -946,6 +952,9 @@ def build_strong_primitive_profile(
             "quantile_thresholds": {
                 k: [safe_float(v[0]), safe_float(v[1])] for k, v in quantiles.items()
             },
+            "profile_setting": {
+                "include_label_association": bool(include_label_association)
+            },
             "field_explanation": {
                 "count": "Number of token occurrences assigned to this primitive.",
                 "frequency": "count / total valid primitive tokens.",
@@ -984,6 +993,7 @@ def build_strong_primitive_profile(
             stats=stats,
             label_distribution=label_distribution,
             quantiles=quantiles,
+            include_label_association=include_label_association,
         )
 
         case_study = make_case_study_summary(
@@ -999,11 +1009,18 @@ def build_strong_primitive_profile(
             stats=stats,
         )
 
+        motion_structure_score = compute_motion_structure_score(
+            count=cnt,
+            total_tokens=accumulator.total_tokens,
+            stats=stats,
+        )
+
         profile[str(cid)] = {
             "id": int(cid),
             "count": int(cnt),
             "frequency": frequency,
             "semantic_score": semantic_score,
+            "motion_structure_score": motion_structure_score,
             "label_distribution": label_distribution,
             "transition_distribution": {
                 "previous": prev_distribution,
@@ -1022,7 +1039,35 @@ def build_strong_primitive_profile(
 
     return profile
 
+def compute_motion_structure_score(
+    count: int,
+    total_tokens: int,
+    stats: Dict[str, Any],
+):
+    """
+    Label-free score for sorting/displaying primitives.
+    It does not use label purity.
+    """
+    if count <= 0:
+        return 0.0
 
+    support = min(math.log(count + 1.0) / math.log(max(total_tokens, 2.0)), 1.0)
+    channel_dom = safe_float(stats.get("dominant_channel_ratio", 0.0))
+    energy = safe_float(stats.get("energy_mean", 0.0))
+    periodicity = safe_float(stats.get("periodicity_mean", 0.0))
+    temporal = safe_float(stats.get("temporal_variation_mean", 0.0))
+    spectral_entropy = safe_float(stats.get("spectral_entropy_mean", 0.0))
+
+    motion_strength = math.tanh(energy + temporal)
+    structure = 0.4 * periodicity + 0.3 * channel_dom + 0.3 * (1.0 - spectral_entropy)
+
+    score = (
+        0.30 * support
+        + 0.35 * structure
+        + 0.35 * motion_strength
+    )
+
+    return safe_float(max(0.0, min(score, 1.0)))
 def compute_motion_semantic_score(
     count: int,
     total_tokens: int,

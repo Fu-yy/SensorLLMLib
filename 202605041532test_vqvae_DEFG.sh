@@ -60,8 +60,10 @@ EXPERIMENTS=(
   "K_hard_lambda0p3|0.3|1|1.0"
 )
 EXPERIMENTS=(
-  "J_soft_lambda0p09|0.09|0|2.0"
-  "K_hard_lambda0p3|0.3|1|1.0"
+#"D_soft_lambda0p7|0.7|0|2.0"
+#  "E_soft_lambda0p9|0.9|0|2.0"
+#  "F_soft_lambda0p01|0.01|0|2.0"
+  "G_soft_lambda0p03|0.03|0|2.0"
 )
 clean_cache() {
     TARGET_DIR="/root/autodl-tmp/SensorLLMLib_v21"
@@ -109,7 +111,7 @@ run_stage1_stage2() {
       --batch_size "$BATCH_SIZE" --trainable_modules "$PRETRAIN_trainable_modules" \
       --llama_name "$LLAMA_NAME" \
       --learning_rate "$LR" --train_epochs "$PRETRAIN_EPOCHS" \
-      --num_workers 0 --itr 5 \
+      --num_workers 0 --itr 1 \
       --use_hard_label "$USE_HARD_LABEL" \
       --mask_mode "$MASK_MODE" \
       --mask_rate "$MASK_RATE" \
@@ -164,22 +166,22 @@ for EXP in "${EXPERIMENTS[@]}"; do
     # ========================================================
     # 1. UCIHAR
     # ========================================================
-    clean_cache
-    run_stage1_stage2 \
-      "/root/autodl-tmp/datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset" \
-      "ucihar" \
-      "UCIHAR" \
-      "UCIHAR" \
-      "${GLOBAL_TIME_TAG}_ucihar_${EXP_NAME}" \
-      "$GLOBAL_LOG_ROOT/ucihar" \
-      128 \
-      128 \
-      64 \
-      32 \
-      0.001 \
-      20 \
-      8 \
-      ""
+#    clean_cache
+#    run_stage1_stage2 \
+#      "/root/autodl-tmp/datasets/human+activity+recognition+using+smartphones/UCI HAR Dataset/UCI HAR Dataset" \
+#      "ucihar" \
+#      "UCIHAR" \
+#      "UCIHAR" \
+#      "${GLOBAL_TIME_TAG}_ucihar_${EXP_NAME}" \
+#      "$GLOBAL_LOG_ROOT/ucihar" \
+#      128 \
+#      128 \
+#      64 \
+#      32 \
+#      0.001 \
+#      20 \
+#      8 \
+#      ""
 
     # ========================================================
     # 2. USC-HAD

@@ -283,6 +283,30 @@ class Exp_Classification(Exp_Basic):
 
         return p
 
+    def _get_stage1_load_setting(self, current_setting: str) -> str:
+        """
+        Stage2 加载 Stage1 权重时使用的 setting。
+
+        目的：
+        - Stage2 自己的 setting 可以是 test_0/test_1/test_2/test_3/test_4；
+        - 但 Stage1 预训练通常只跑一次，因此默认固定加载 test_0 的 Stage1 权重；
+        - 如果用户手动指定 args.pretrain_setting，则优先使用用户指定值。
+        """
+        pretrain_setting = getattr(self.args, "pretrain_setting", None)
+
+        if pretrain_setting is not None and str(pretrain_setting).strip() != "":
+            return str(pretrain_setting)
+
+        pretrain_ii = int(getattr(self.args, "pretrain_ii", 0))
+
+        # current_setting 的最后一段是 iter 编号，例如 ..._test_3
+        # 这里替换成 ..._test_0
+        parts = current_setting.rsplit("_", 1)
+        if len(parts) == 2 and parts[-1].isdigit():
+            return parts[0] + f"_{pretrain_ii}"
+
+        # 兜底：如果 setting 格式异常，就直接返回 current_setting
+        return current_setting
     def _dump_meta(self, meta_path: str, stage: str, setting: str, paths: dict):
         meta_path = to_secure_path(meta_path)
 
@@ -503,17 +527,52 @@ class Exp_Classification(Exp_Basic):
         return data_provider(self.args, flag)
 
     def _autofind_stage1_paths(self, setting: str):
-        # save_root = os.path.join(getattr(self.args, "pretrain_checkpoints", "./pretrain_ckpts"), setting)
-        save_root = os.path.join(self.run_root, "stage1", "ckpts", setting)
+        """
+        自动查找 Stage1 预训练权重。
+
+        注意：
+        - setting 是当前 Stage2 的 setting，例如 ..._test_3；
+        - 真正加载 Stage1 时，默认使用 ..._test_0；
+        - 也可以通过 args.stage1_ckpt 直接指定权重路径；
+        - 也可以通过 args.pretrain_setting 指定完整 Stage1 setting。
+        """
+
+        # 最高优先级：用户直接指定 Stage1 wrapper 权重路径
+        stage1_ckpt = str(getattr(self.args, "stage1_ckpt", "") or "").strip()
+        if stage1_ckpt:
+            stage1_ckpt = to_secure_path(stage1_ckpt)
+            save_root = os.path.dirname(stage1_ckpt)
+            if not os.path.isfile(stage1_ckpt):
+                raise FileNotFoundError(
+                    f"[Stage2] args.stage1_ckpt is set but file not found:\n{stage1_ckpt}"
+                )
+            return save_root, stage1_ckpt, None
+
+        # 次优先级：用户直接指定 HF 目录
+        stage1_hf_dir = str(getattr(self.args, "stage1_hf_dir", "") or "").strip()
+        if stage1_hf_dir:
+            stage1_hf_dir = to_secure_path(stage1_hf_dir)
+            save_root = os.path.dirname(stage1_hf_dir)
+            if not os.path.isdir(stage1_hf_dir):
+                raise FileNotFoundError(
+                    f"[Stage2] args.stage1_hf_dir is set but dir not found:\n{stage1_hf_dir}"
+                )
+            return save_root, None, stage1_hf_dir
+
+        # 默认：Stage2 的 setting 可能是 test_0~test_4，但 Stage1 固定加载 test_0
+        stage1_setting = self._get_stage1_load_setting(setting)
+        save_root = os.path.join(self.run_root, "stage1", "ckpts", stage1_setting)
 
         wrapper_path = os.path.join(save_root, "best_wrapper_student_checkoutpoint.pth")
-        hf_dir = os.path.join(save_root, "best_hf")  # 你 save_hf_bundle(tag="best") 就是这个
+        hf_dir = os.path.join(save_root, "best_hf")
+
+        wrapper_path = to_secure_path(wrapper_path)
+        hf_dir = to_secure_path(hf_dir)
 
         has_wrapper = os.path.isfile(wrapper_path)
         has_hf = os.path.isdir(hf_dir)
 
         return save_root, (wrapper_path if has_wrapper else None), (hf_dir if has_hf else None)
-
     # -------------------------
     # save/load hf
     # -------------------------
@@ -839,16 +898,39 @@ class Exp_Classification(Exp_Basic):
     def pretrain_test(self, setting, test=0):
         if not self._is_two_stage_model():
             raise RuntimeError("Stage1 test called, but model is not two-stage.")
+
+        paths = self._paths_for_setting(setting)
+
         if test:
-            self._maybe_load_stage1_hf()
+            wrapper_path = paths["stage1_wrapper"]
+            hf_dir = os.path.join(paths["stage1_ckpt_dir"], "best_hf")
+
+            m = _unwrap(self.model)
+
+            if os.path.isfile(wrapper_path):
+                self.log(f"[Stage1-Test] loading wrapper: {wrapper_path}")
+                if hasattr(m, "load_wrapper"):
+                    m.load_wrapper(wrapper_path, map_location=self.device)
+                else:
+                    sd = torch.load(wrapper_path, map_location=self.device)
+                    m.load_state_dict(sd, strict=False)
+
+            elif os.path.isdir(hf_dir):
+                self.log(f"[Stage1-Test] loading hf: {hf_dir}")
+                self._maybe_load_stage1_hf(hf_dir)
+
+            else:
+                raise FileNotFoundError(
+                    f"[Stage1-Test] no checkpoint found for setting={setting}\n"
+                    f"wrapper: {wrapper_path}\n"
+                    f"hf_dir : {hf_dir}"
+                )
 
         _, test_loader = self._get_data(flag="TEST")
         test_mse = self.pretrain_vali(test_loader)
 
-        # folder_path = os.path.join("./results_pretrain", setting)
         folder_path = os.path.join(self.run_root, "stage1", "results", setting)
         folder_path = to_secure_path(folder_path)
-
         os.makedirs(folder_path, exist_ok=True)
 
         self.log(f"[Stage1-Test] test_mse={test_mse:.6f}")
@@ -859,7 +941,6 @@ class Exp_Classification(Exp_Basic):
             f.write(f"test_mse:{test_mse:.6f}\n\n")
 
         return test_mse
-
     @torch.no_grad()
     def diagnose_vq_codebook(self, loader, split_name="TRAIN"):
         """
@@ -1356,32 +1437,7 @@ class Exp_Classification(Exp_Basic):
 
     def train(self, setting):
 
-        # stage2 load stage1 automatically
-        save_root, wrapper_path, hf_dir = self._autofind_stage1_paths(setting)
-
-
-
-        if wrapper_path is not None:
-            self.log(f"[auto-load] stage1 wrapper: {wrapper_path}")
-            m = _unwrap(self.model)
-            if hasattr(m, "stage"):
-                m.stage = 2
-            if hasattr(m, "load_wrapper"):
-                m.load_wrapper(wrapper_path, map_location=self.device)
-            else:
-                sd = torch.load(wrapper_path, map_location=self.device)
-                m.load_state_dict(sd, strict=False)
-
-        elif hf_dir is not None:
-            self.log(f"[auto-load] stage1 hf: {hf_dir}")
-            self._maybe_load_stage1_hf(hf_dir)  # 你已有的函数会用 save_root
-        else:
-            self.log(f"[auto-load][warn] no stage1 found under: {save_root}")
-
         self.args.stage = 2
-        # m = _unwrap(self.model)
-        # if hasattr(m, "stage"):
-        #     m.stage = 2
 
         _, train_loader = self._get_data(flag="TRAIN")
         _, val_loader = self._get_data(flag="TEST")
@@ -1389,32 +1445,79 @@ class Exp_Classification(Exp_Basic):
 
         paths = self._paths_for_setting(setting)
 
-        # stage2 logger 每 setting 一个文件（推荐）
+        # Stage2 logger 每 setting 一个文件
+        # 注意：logger 要放到 auto-load 前面，否则 auto-load 信息不会写入日志
         self.logger = TeeLogger(paths["stage2_log"])
 
-        # stage2 ckpt_dir
+        # Stage2 ckpt_dir：当前微调自己的保存目录，仍然用当前 setting
         path = paths["stage2_ckpt_dir"]
         path = to_secure_path(path)
-
         os.makedirs(path, exist_ok=True)
 
-        # stage2 meta
+        # Stage2 meta
         self._dump_meta(paths["meta_stage2"], stage="stage2", setting=setting, paths=paths)
 
         self.log(f"[Stage2-Train] setting={setting}")
+
+        # ============================================================
+        # Stage2 load Stage1 automatically
+        # ============================================================
+        stage1_load_setting = self._get_stage1_load_setting(setting)
+        self.log(f"[Stage2] current finetune setting: {setting}")
+        self.log(f"[Stage2] stage1 load setting     : {stage1_load_setting}")
+
+        save_root, wrapper_path, hf_dir = self._autofind_stage1_paths(setting)
+
+        if wrapper_path is not None:
+            self.log(f"[auto-load] stage1 wrapper: {wrapper_path}")
+
+            m = _unwrap(self.model)
+            if hasattr(m, "stage"):
+                m.stage = 2
+
+            if hasattr(m, "load_wrapper"):
+                m.load_wrapper(wrapper_path, map_location=self.device)
+            else:
+                sd = torch.load(wrapper_path, map_location=self.device)
+                m.load_state_dict(sd, strict=False)
+
+            self.log("[auto-load] stage1 wrapper loaded successfully.")
+
+        elif hf_dir is not None:
+            self.log(f"[auto-load] stage1 hf: {hf_dir}")
+            self._maybe_load_stage1_hf(hf_dir)
+            self.log("[auto-load] stage1 hf loaded successfully.")
+
+        else:
+            raise FileNotFoundError(
+                f"\n[Stage2] No Stage1 pretrained checkpoint found.\n"
+                f"Current Stage2 setting : {setting}\n"
+                f"Expected Stage1 setting: {stage1_load_setting}\n"
+                f"Searched under         : {save_root}\n\n"
+                f"Solutions:\n"
+                f"1) Run Stage1 first with --stage 1 --itr 1;\n"
+                f"2) Or set --pretrain_ii 0;\n"
+                f"3) Or pass --stage1_ckpt /path/to/best_wrapper_student_checkoutpoint.pth.\n"
+            )
 
         if bool(getattr(self.args, "freeze_llm", True)):
             self.set_trainable_modules()
 
         # ---- diagnostics ----
-        self.log(f"[HP] lr={float(self.args.learning_rate):.2e} wd={float(self.args.weight_decay):.2e} min_lr={float(self.args.min_lr):.2e} warmup_epochs={int(self.args.warmup_epochs)} cosine_by_iter={bool(self.args.cosine_by_iter)} monitor={str(getattr(self.args,'monitor','acc'))}")
+        self.log(
+            f"[HP] lr={float(self.args.learning_rate):.2e} "
+            f"wd={float(self.args.weight_decay):.2e} "
+            f"min_lr={float(self.args.min_lr):.2e} "
+            f"warmup_epochs={int(self.args.warmup_epochs)} "
+            f"cosine_by_iter={bool(self.args.cosine_by_iter)} "
+            f"monitor={str(getattr(self.args, 'monitor', 'acc'))}"
+        )
 
         opt = self._select_optimizer()
         scheduler = self._build_scheduler(opt, steps_per_epoch=len(train_loader))
 
         criterion = self._select_criterion(train_loader=train_loader)
 
-        # early stop: default monitor acc (same as V1)
         monitor = str(getattr(self.args, "monitor", "acc")).lower()
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
@@ -1435,12 +1538,7 @@ class Exp_Classification(Exp_Basic):
                 label = label.to(self.device)
 
                 outputs = self._forward_classify(batch_x, padding_mask)
-                # print("outputs:", outputs.shape, "label:", label.shape)
                 target = label.long().view(-1)
-                # label_test= label.long().squeeze(-1)
-                # print("target:", target.shape)
-                # print("label_test:", label_test.shape)
-                # print(i)
                 loss = criterion(outputs, target)
 
                 train_loss.append(float(loss.item()))
@@ -1449,20 +1547,19 @@ class Exp_Classification(Exp_Basic):
                 nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
                 opt.step()
 
-                # iter-step scheduler
                 if scheduler is not None and bool(getattr(self.args, "cosine_by_iter", False)):
                     scheduler.step()
 
                 if (i + 1) % 100 == 0:
                     speed = (time.time() - time_now) / 100
                     left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
-                    self.log(f"\titers:{i + 1}, epoch:{epoch + 1} | loss:{loss.item():.6f} | "
-                             f"speed:{speed:.4f}s/iter | left:{left_time:.1f}s")
-                    # lr snapshot
+                    self.log(
+                        f"\titers:{i + 1}, epoch:{epoch + 1} | loss:{loss.item():.6f} | "
+                        f"speed:{speed:.4f}s/iter | left:{left_time:.1f}s"
+                    )
                     self._log_lrs(opt, "[LR] iter")
                     time_now = time.time()
 
-            # epoch-step scheduler
             if scheduler is not None and not bool(getattr(self.args, "cosine_by_iter", False)):
                 if isinstance(scheduler, dict):
                     if epoch < int(getattr(self.args, "warmup_epochs", 0)):
@@ -1473,47 +1570,25 @@ class Exp_Classification(Exp_Basic):
                     scheduler.step()
 
             train_loss = float(np.mean(train_loss)) if len(train_loss) else 0.0
-            # val_loss, val_acc = self.vali_classify(val_loader, criterion)
-            # test_loss, test_acc = self.vali_classify(test_loader, criterion)
-            #
-            # self._log_lrs(opt, f"[LR] epoch={epoch+1}")
 
             val_loss, val_m = self.vali_classify(val_loader, criterion)
             test_loss, test_m = self.vali_classify(test_loader, criterion)
 
-            self._log_lrs(opt, f"[LR] epoch={epoch+1}")
+            self._log_lrs(opt, f"[LR] epoch={epoch + 1}")
 
             self.log(
                 f"[Stage2-Classify] Epoch:{epoch + 1} | Train:{train_loss:.4f} | "
-                f"Val:{val_loss:.4f} acc:{val_m['acc']:.4f} f1m:{val_m['f1_macro']:.4f} recm:{val_m['recall_macro']:.4f} prem:{val_m['precision_macro']:.4f} | "
+                f"Val:{val_loss:.4f} acc:{val_m['acc']:.4f} f1m:{val_m['f1_macro']:.4f} "
+                f"recm:{val_m['recall_macro']:.4f} prem:{val_m['precision_macro']:.4f} | "
                 f"Test:{test_loss:.4f} acc:{test_m['acc']:.4f} f1m:{test_m['f1_macro']:.4f} | "
                 f"time:{time.time() - epoch_time:.1f}s"
             )
 
-            #
-            # # 默认训练中不评估 test（科研规范）
-            # if bool(getattr(self.args, "eval_test_during_train", False)):
-            #     test_loss, test_acc = self.vali_classify(test_loader, criterion)
-            #     test_msg = f" | Test:{test_loss:.4f} Acc:{test_acc:.4f}"
-            # else:
-            #     test_msg = ""
-            #
-            # self.log(
-            #     f"[Stage2-Classify] Epoch:{epoch + 1} | Train:{train_loss:.4f} | "
-            #     f"Val:{val_loss:.4f} Acc:{val_acc:.4f}{test_msg} | "
-            #     f"time:{time.time() - epoch_time:.1f}s"
-            # )
-            #
-            # # self.log(f"[Stage2-Classify] Epoch:{epoch + 1} | Train:{train_loss:.4f} | "
-            # #          f"Val:{val_loss:.4f} Acc:{val_acc:.4f} | Test:{test_loss:.4f} Acc:{test_acc:.4f} | "
-            # #          f"time:{time.time() - epoch_time:.1f}s")
-
-            # early stopping
             if monitor == "loss":
                 early_stopping(val_loss, self.model, path)
             else:
                 early_stopping(-val_m["acc"], self.model, path)
-            # ---- write stage2 status (best snapshot if updated) ----
+
             status_path = os.path.join(paths["meta_dir"], "status_stage2.json")
             status_path = to_secure_path(status_path)
 
@@ -1525,6 +1600,9 @@ class Exp_Classification(Exp_Basic):
                     "val_loss": float(val_loss),
                     "test_acc": float(test_m["acc"]),
                     "test_loss": float(test_loss),
+                    "stage1_load_setting": str(stage1_load_setting),
+                    "stage1_wrapper_path": str(wrapper_path) if wrapper_path is not None else None,
+                    "stage1_hf_dir": str(hf_dir) if hf_dir is not None else None,
                     "artifact_path": paths["stage2_ckpt"],
                     "artifact_exists": os.path.exists(paths["stage2_ckpt"]),
                     "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1534,18 +1612,11 @@ class Exp_Classification(Exp_Basic):
                 self.log("Early stopping")
                 break
 
-        # best_model_path = os.path.join(path, "checkpoint.pth")
-        # if os.path.exists(best_model_path):
-        #     self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
         best_model_path = os.path.join(path, "checkpoint.pth")
         if os.path.exists(best_model_path):
             self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
 
-        # # 最终只评估一次 test（用 val-best）
-        # final_test_loss, final_test_acc = self.vali_classify(test_loader, criterion)
-        # self.log(f"[Stage2-FinalTest] loss:{final_test_loss:.6f} acc:{final_test_acc:.6f}")
         return self.model
-
     def test_classify(self, setting, test=0):
         _, test_loader = self._get_data(flag="TEST")
         if test:

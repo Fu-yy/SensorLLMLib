@@ -110,7 +110,7 @@ run_stage1_stage2() {
       --batch_size "$BATCH_SIZE" --trainable_modules "$PRETRAIN_trainable_modules" \
       --llama_name "$LLAMA_NAME" \
       --learning_rate "$LR" --train_epochs "$PRETRAIN_EPOCHS" \
-      --num_workers 0 --itr 5 \
+      --num_workers 0 --itr 1 \
       --use_hard_label "$USE_HARD_LABEL" \
       --mask_mode "$MASK_MODE" \
       --mask_rate "$MASK_RATE" \
@@ -307,6 +307,8 @@ for EXP in "${EXPERIMENTS[@]}"; do
     echo "Logs at: $GLOBAL_LOG_ROOT"
     echo "========================================================"
 done
+
+
 
 
 

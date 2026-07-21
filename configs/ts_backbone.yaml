@@ -28,6 +28,9 @@ uschad:
   num_labels: 12
   channel_num: 6
   sample_rate: 100
+  # Low-motion Gated Posture-Sensitive Expert
+  static_labels: [ 7, 8, 9 ]
+  posture_sensitive_labels: [ 7, 8, 9, 10, 11 ]
   default_x_acc_start_token: '<x_acc_start>'
   default_x_acc_end_token: '<x_acc_end>'
   default_y_acc_start_token: '<y_acc_start>'
@@ -59,6 +62,9 @@ ucihar:
   num_labels: 6
   channel_num: 6
   sample_rate: 50
+  # Low-motion Gated Posture-Sensitive Expert
+  static_labels: [ 3, 4, 5 ]
+  posture_sensitive_labels: [ 3, 4, 5 ]
   default_x_acc_start_token: '<x_acc_start>'
   default_x_acc_end_token: '<x_acc_end>'
   default_y_acc_start_token: '<y_acc_start>'
@@ -96,6 +102,9 @@ mhealth:
   num_labels: 12
   channel_num: 15
   sample_rate: 50
+  # Low-motion Gated Posture-Sensitive Expert
+  static_labels: [ 0, 1, 2 ]
+  posture_sensitive_labels: [ 0, 1, 2, 5, 6, 7 ]
   channel_names:
     - chest_acc_x
     - chest_acc_y
@@ -168,6 +177,9 @@ pamap50:
   num_labels: 12
   channel_num: 27
   sample_rate: 50
+  # Low-motion Gated Posture-Sensitive Expert
+  static_labels: [ 0, 1, 2 ]
+  posture_sensitive_labels: [ 0, 1, 2, 9, 10 ]
   default_chest_x_acc_start_token: '<chest_x_acc_start>'
   default_chest_x_acc_end_token: '<chest_x_acc_end>'
   default_chest_y_acc_start_token: '<chest_y_acc_start>'
@@ -248,6 +260,9 @@ pamap:
   num_labels: 12
   channel_num: 27
   sample_rate: 100
+  # Low-motion Gated Posture-Sensitive Expert
+  static_labels: [ 0, 1, 2 ]
+  posture_sensitive_labels: [ 0, 1, 2, 9, 10 ]
   default_chest_x_acc_start_token: '<chest_x_acc_start>'
   default_chest_x_acc_end_token: '<chest_x_acc_end>'
   default_chest_y_acc_start_token: '<chest_y_acc_start>'
@@ -326,6 +341,9 @@ capture24:
   num_labels: 10
   channel_num: 3
   sample_rate: 50
+  # Low-motion Gated Posture-Sensitive Expert
+  static_labels: [ 0, 1, 7 ]
+  posture_sensitive_labels: [ 0, 1, 2, 4, 7, 8 ]
   default_x_acc_start_token: '<x_acc_start>'
   default_x_acc_end_token: '<x_acc_end>'
   default_y_acc_start_token: '<y_acc_start>'
@@ -345,6 +363,9 @@ motionsense:
   # channel_num depends on feature_set in args:
   # a12 -> 12, acc3/gyro3 -> 3
   channel_num: 12
+  # Low-motion Gated Posture-Sensitive Expert
+  static_labels: [4, 5]
+  posture_sensitive_labels: [4, 5]
   qua_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\motionsense\20260115_212219_motionsense_sensorllm\stage1\ckpts\vqvae_MotionSense_VQVAE_MotionSense_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   freq_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\motionsense\20260115_225055_motionsense_sensorllm\stage1\ckpts\vqvae_MotionSense_VQVAE_MotionSense_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\motionsense\20260116_003501_motionsense_sensorllm\stage1\ckpts\vqvae_MotionSense_VQVAE_MotionSense_ftM_sl128_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
@@ -365,6 +386,9 @@ wisdm:
   num_labels: 6
   channel_num: 3
   sample_rate: 20
+  # Low-motion Gated Posture-Sensitive Expert
+  static_labels: [ 4, 5 ]
+  posture_sensitive_labels: [ 4, 5 ]
   qua_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\wisdm\20260115_212219_wisdm_sensorllm\stage1\ckpts\vqvae_WISDM_VQVAE_WISDM_ftM_sl80_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   freq_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\wisdm\20260115_225055_wisdm_sensorllm\stage1\ckpts\vqvae_WISDM_VQVAE_WISDM_ftM_sl80_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
   recon_path: 'D:\fuy\MyCode\SensorLLMLib_v1\runs\VQVAE\wisdm\20260116_003501_wisdm_sensorllm\stage1\ckpts\vqvae_WISDM_VQVAE_WISDM_ftM_sl80_ll48_pl0_dm32_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_test_0'
@@ -384,6 +408,9 @@ hhar:
   num_labels: 6
   channel_num: 6
   sample_rate: 100
+  # Low-motion Gated Posture-Sensitive Expert
+  static_labels: [ 1, 2 ]
+  posture_sensitive_labels: [ 1, 2 ]
   # alignment defaults (so experiments are reproducible)
   align_on: 'Arrival_Time'
   tol_sec: 0.05
@@ -422,6 +449,9 @@ hhar_cross_user:
   num_labels: 6
   channel_num: 6
   sample_rate: 100
+  # Low-motion Gated Posture-Sensitive Expert
+  static_labels: [ 1, 2 ]
+  posture_sensitive_labels: [ 1, 2 ]
   # alignment defaults (so experiments are reproducible)
   align_on: 'Arrival_Time'
   tol_sec: 0.05

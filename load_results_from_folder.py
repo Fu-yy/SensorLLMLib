@@ -210,27 +210,32 @@ if __name__ == "__main__":
     ROOT_DIRECTORY_04 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260505_152521_C_hard_lambda0p3_mask_0.4"
     OUTPUT_FILE_04 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260505_152521_C_hard_lambda0p3_mask_0.4_experiment_results.xlsx"
 
-    ROOT_DIRECTORY_05 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260506_044110_D_soft_lambda0p1_mask_0.4"
-    OUTPUT_FILE_05 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260506_044110_D_soft_lambda0p1_mask_0.4_experiment_results.xlsx"
+    ROOT_DIRECTORY_05 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260506_202655_D_soft_lambda0p7_mask_0.4"
+    OUTPUT_FILE_05 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260506_202655_D_soft_lambda0p7_mask_0.4_experiment_results.xlsx"
 
-    ROOT_DIRECTORY_06 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260505_152521_B_soft_lambda0p3_mask_0.4"
-    OUTPUT_FILE_06 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260505_152521_B_soft_lambda0p3_mask_0.4_experiment_results.xlsx"
+    ROOT_DIRECTORY_06 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260506_202655_E_soft_lambda0p9_mask_0.4"
+    OUTPUT_FILE_06 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260506_202655_E_soft_lambda0p9_mask_0.4_experiment_results.xlsx"
 
-    ROOT_DIRECTORY_07 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260506_044110_E_soft_lambda0p3_mask_0.4"
-    OUTPUT_FILE_07 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260506_044110_E_soft_lambda0p3_mask_0.4_experiment_results.xlsx"
+    ROOT_DIRECTORY_07 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260506_202655_F_soft_lambda0p01_mask_0.4"
+    OUTPUT_FILE_07 = r"/root/autodl-tmp/SensorLLMLib_v2/run_log/batch_20260506_202655_F_soft_lambda0p01_mask_0.4_experiment_results.xlsx"
+    ROOT_DIRECTORY_08 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\primalignhar_cg_sample_prompt_20260511_165249"
+    OUTPUT_FILE_08 = r"D:\fuy\MyCode\SensorLLMLib_v2\run_log\primalignhar_cg_sample_prompt_20260511_165249_experiment_results.xlsx"
 
     # ===========================================
 
-    if os.path.exists(ROOT_DIRECTORY_03):
-        process_logs(ROOT_DIRECTORY_03, OUTPUT_FILE_03)
-    if os.path.exists(ROOT_DIRECTORY_04):
-        process_logs(ROOT_DIRECTORY_04, OUTPUT_FILE_04)
-    if os.path.exists(ROOT_DIRECTORY_05):
-        process_logs(ROOT_DIRECTORY_05, OUTPUT_FILE_05)
-    if os.path.exists(ROOT_DIRECTORY_06):
-        process_logs(ROOT_DIRECTORY_06, OUTPUT_FILE_06)
-    if os.path.exists(ROOT_DIRECTORY_07):
-        process_logs(ROOT_DIRECTORY_07, OUTPUT_FILE_07)
+    # if os.path.exists(ROOT_DIRECTORY_03):
+    #     process_logs(ROOT_DIRECTORY_03, OUTPUT_FILE_03)
+    # if os.path.exists(ROOT_DIRECTORY_04):
+    #     process_logs(ROOT_DIRECTORY_04, OUTPUT_FILE_04)
+    # if os.path.exists(ROOT_DIRECTORY_05):
+    #     process_logs(ROOT_DIRECTORY_05, OUTPUT_FILE_05)
+    # if os.path.exists(ROOT_DIRECTORY_06):
+    #     process_logs(ROOT_DIRECTORY_06, OUTPUT_FILE_06)
+    # if os.path.exists(ROOT_DIRECTORY_07):
+    #     process_logs(ROOT_DIRECTORY_07, OUTPUT_FILE_07)
+
+    if os.path.exists(ROOT_DIRECTORY_08):
+        process_logs(ROOT_DIRECTORY_08, OUTPUT_FILE_08)
     # if os.path.exists(ROOT_DIRECTORY2):
     #     process_logs(ROOT_DIRECTORY2, OUTPUT_FILE2)
     # if os.path.exists(ROOT_DIRECTORY3):

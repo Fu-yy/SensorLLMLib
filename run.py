@@ -3,6 +3,7 @@ import os
 import torch
 import torch.backends
 
+from exp.exp_alignment_HAR import Exp_Alignment_LLM
 from exp.exp_alignment_class import Exp_Alignment_Classification
 from exp.exp_long_term_forecasting import Exp_Long_Term_Forecast
 from exp.exp_imputation import Exp_Imputation
@@ -207,6 +208,12 @@ if __name__ == '__main__':
     parser.add_argument("--diagnose_vq", type=int, default=0)
     parser.add_argument("--apply_eval_missing", type=int, default=0)
     parser.add_argument("--distill_temperature ", type=float, default=0.5)
+
+
+    parser.add_argument("--use_static_branch", type=int, default=1)
+    parser.add_argument("--static_alpha", type=float, default=0.8)
+    parser.add_argument("--lambda_static_aux", type=float, default=0.2)
+    parser.add_argument("--lambda_static_gate", type=float, default=0.05)
     parser.add_argument(
         "--eval_missing_protocol",
         type=str,
@@ -242,6 +249,7 @@ if __name__ == '__main__':
     parser.add_argument("--stage2_trainable", type=str, default="activity_only")
 
     parser.add_argument("--weight_decay", type=float, default=0.0001)
+    parser.add_argument("--lambda_primitive", type=float, default=0.5)
     parser.add_argument("--min_lr", type=float, default=0.00001)
     parser.add_argument("--warmup_epochs", type=int, default=0)
 
@@ -249,11 +257,67 @@ if __name__ == '__main__':
     parser.add_argument("--force_build_primitive_profile", type=int, default=1)
     parser.add_argument("--primitive_profile_examples", type=int, default=5)
     parser.add_argument("--primitive_profile_min_valid_ratio", type=float, default=0.5)
+    parser.add_argument('--pretrain_ii', type=int, default=0,
+                        help='Which Stage1 iter to load for Stage2. Default: 0.')
 
+    parser.add_argument('--pretrain_setting', type=str, default='',
+                        help='Full Stage1 setting name to load for Stage2. If set, overrides pretrain_ii.')
+
+    parser.add_argument('--stage1_ckpt', type=str, default='',
+                        help='Direct path to Stage1 best_wrapper_student_checkoutpoint.pth. Highest priority.')
+
+    parser.add_argument('--stage1_hf_dir', type=str, default='',
+                        help='Direct path to Stage1 HF directory. Used only when wrapper ckpt is not provided.')
+
+    parser.add_argument("--prompt_mode", type=str, default="no_label")
+    parser.add_argument("--prompt_max_primitives", type=int, default=16)
+    parser.add_argument("--prompt_max_new_tokens", type=int, default=128)
+    parser.add_argument("--prompt_save_text", type=int, default=0)
+    parser.add_argument("--prompt_default_confidence", type=str, default="medium")
+
+    parser.add_argument("--prompt_eval_max_cases", type=int, default=-1)
+
+
+
+
+
+
+
+
+
+
+
+    # 202605101028 add
+    # =========================================================
+    # Channel-grounded primitive semantic / prompt arguments
+    # =========================================================
+    parser.add_argument('--primitive_semantic_dim', type=int, default=512)
+    parser.add_argument('--semantic_batch_size', type=int, default=16)
+    parser.add_argument('--semantic_max_length', type=int, default=128)
+    parser.add_argument('--force_build_semantic_cache', type=int, default=0)
+
+    parser.add_argument('--lambda_semantic', type=float, default=0.2)
+    parser.add_argument('--lambda_label_align', type=float, default=0.2)
+    parser.add_argument('--label_align_temperature', type=float, default=0.07)
+
+    parser.add_argument('--label_text_batch_size', type=int, default=16)
+    parser.add_argument('--label_text_max_length', type=int, default=64)
+
+    parser.add_argument('--use_segment_stats', type=int, default=1)
+    parser.add_argument('--stat_weight', type=float, default=1.0)
+    parser.add_argument('--use_channel_summary', type=int, default=1)
+
+    parser.add_argument('--use_text_prompt', type=int, default=1)
+    parser.add_argument('--use_sample_prompt', type=int, default=1)
+    parser.add_argument('--prompt_top_channels', type=int, default=3)
+    parser.add_argument('--prompt_num_segment_examples', type=int, default=4)
+    parser.add_argument('--prompt_include_primitive_ids', type=int, default=0)
+
+    parser.add_argument('--prompt_max_length', type=int, default=384)
 
     args = parser.parse_args()
 
-    if args.model=="SensorLLMFuy_test_withllm_mae_vqvae_with_alignment" or args.model=="Alignment_Stage" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae" or args.model == "VQVAE" or args.model == "SensorLLMFuy" or args.model == "SensorLLMFuy_202512301643_backmodel_randommask" or args.model == "SensorLLMFuy_batch_20251231_163911" or args.model == "SensorLLMFuy_batch_20251231_164145" or args.model == "SensorLLMFuy_test" or args.model == "SensorLLMFuy_batch_20251231_164145_new" or args.model == "SensorLLMFuy_test_nollm_mae" or args.model == "SensorLLMFuy_test_nollm_contri" or args.model == "SensorLLMFuy_test_withllm_mae":
+    if args.model=="PrimitiveAlignHAR" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae_with_alignment" or args.model=="Alignment_Stage" or args.model=="SensorLLMFuy_test_withllm_mae_vqvae" or args.model == "VQVAE" or args.model == "SensorLLMFuy" or args.model == "SensorLLMFuy_202512301643_backmodel_randommask" or args.model == "SensorLLMFuy_batch_20251231_163911" or args.model == "SensorLLMFuy_batch_20251231_164145" or args.model == "SensorLLMFuy_test" or args.model == "SensorLLMFuy_batch_20251231_164145_new" or args.model == "SensorLLMFuy_test_nollm_mae" or args.model == "SensorLLMFuy_test_nollm_contri" or args.model == "SensorLLMFuy_test_withllm_mae":
         args.two_stage = 1
     else:
         args.two_stage = 0
@@ -293,6 +357,8 @@ if __name__ == '__main__':
         Exp = Exp_Classification
     elif args.task_name == 'zero_shot_forecast':
         Exp = Exp_Zero_Shot_Forecast
+    elif args.task_name == 'alignmentllm':
+        Exp = Exp_Alignment_LLM
     else:
         Exp = Exp_Long_Term_Forecast
 
@@ -339,8 +405,8 @@ if __name__ == '__main__':
 
                     exp.train(setting)
 
-                print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-                exp.test(setting)
+                    print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+                    exp.test(setting)
             if args.gpu_type == 'mps':
                 torch.backends.mps.empty_cache()
             elif args.gpu_type == 'cuda':

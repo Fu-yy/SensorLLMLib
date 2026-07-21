@@ -196,7 +196,7 @@ class TeeLogger:
                 f.flush()
 
 
-class Exp_Alignment_Classification(Exp_Basic):
+class Exp_Alignment_LLM(Exp_Basic):
     """
     V2-fixed:
       - optimizer param groups (decay/no_decay)
@@ -295,101 +295,7 @@ class Exp_Alignment_Classification(Exp_Basic):
         p["meta_stage2"] = os.path.join(p["meta_dir"], "meta_stage2.json")
 
         return p
-    def _get_stage1_load_setting(self, current_setting: str) -> str:
-        """
-        Stage2 加载 Stage1 权重时使用的 setting。
 
-        目的：
-        - Stage2 可以跑 test_0/test_1/test_2/test_3/test_4；
-        - 但 Stage1 预训练默认只跑一次，因此 Stage2 默认固定加载 test_0 的 Stage1；
-        - 如果用户手动指定 args.pretrain_setting，则优先使用用户指定值；
-        - 如果用户指定 args.pretrain_ii，则加载对应编号，默认 0。
-        """
-        pretrain_setting = getattr(self.args, "pretrain_setting", None)
-
-        if pretrain_setting is not None and str(pretrain_setting).strip() != "":
-            return str(pretrain_setting)
-
-        pretrain_ii = int(getattr(self.args, "pretrain_ii", 0))
-
-        # 例如：
-        # current_setting = "xxx_test_3"
-        # return          = "xxx_test_0"
-        parts = current_setting.rsplit("_", 1)
-
-        if len(parts) == 2 and parts[-1].isdigit():
-            return parts[0] + f"_{pretrain_ii}"
-
-        # 兜底：如果 setting 不符合 xxx_数字 格式，就保持原样
-        return current_setting
-    def _unpack_batch(self, batch):
-        """
-        Unified batch parser.
-
-        Supports:
-          1) old tuple/list batch: (batch_x, label, padding_mask)
-          2) old tuple/list batch: (batch_x, label)
-          3) SensorLLM-style dict batch:
-             {
-                "batch_x": [B,L,C],
-                "labels": [B],
-                "input_ids": [B,T],
-                "attention_mask": [B,T],
-                ... optional Chronos fields
-             }
-        """
-        if isinstance(batch, dict):
-            batch_x = batch.get("batch_x", batch.get("x", batch.get("features", None)))
-            label = batch.get("labels", batch.get("label", batch.get("y", None)))
-            padding_mask = batch.get("padding_mask", batch.get("mask", None))
-
-            extra = {}
-            for k in [
-                "input_ids",
-                "attention_mask",
-                "input_texts",
-                "answer",
-                "ground_truth",
-                "question",
-                "qa_text",
-                "mts_token_ids",
-                "mts_attention_mask",
-                "mts_tokenizer_state",
-                "ts_token_ids",
-                "ts_attention_mask",
-                "ts_tokenizer_state",
-            ]:
-                if k in batch:
-                    extra[k] = batch[k]
-
-            if batch_x is None:
-                raise KeyError("dict batch must contain batch_x/x/features")
-            if label is None:
-                raise KeyError("dict batch must contain labels/label/y")
-
-            return batch_x, label, padding_mask, extra
-
-        if isinstance(batch, (list, tuple)):
-            if len(batch) >= 3:
-                return batch[0], batch[1], batch[2], {}
-            if len(batch) == 2:
-                return batch[0], batch[1], None, {}
-
-        raise TypeError(f"Unsupported batch type: {type(batch)}")
-
-
-    def _move_extra_to_device(self, extra):
-        """Move tensor fields in extra dict to current device. Keep text/list metadata unchanged."""
-        if extra is None:
-            return {}
-
-        moved = {}
-        for k, v in extra.items():
-            if torch.is_tensor(v):
-                moved[k] = v.to(self.device)
-            else:
-                moved[k] = v
-        return moved
     def _dump_meta(self, meta_path: str, stage: str, setting: str, paths: dict):
         meta_path = to_secure_path(meta_path)
 
@@ -828,7 +734,6 @@ class Exp_Alignment_Classification(Exp_Basic):
         )
         print(f"[DatasetCfg] label_names={args.label_names}")
         print(f"[DatasetCfg] channel_names={args.channel_names}")
-
     def _is_two_stage_model(self) -> bool:
         if hasattr(self.args, "two_stage"):
             return bool(getattr(self.args, "two_stage"))
@@ -840,27 +745,23 @@ class Exp_Alignment_Classification(Exp_Basic):
             "primitive_align_har",
             "primalignhar",
             "vqprimalign",
-            "sensorllm_har",
-            "sensorllmharadapter",
-            "sensor_llm_har_adapter",
-            "sensorllmfulladapter",
-            "sensor_llm_full_adapter",
-            "sensorllm_full",
         }:
             return True
 
         m = _unwrap(self.model)
 
+        # 新的 primitive-language teacher
         if hasattr(m, "teacher_core") and hasattr(m.teacher_core, "llm"):
             return True
 
-        if hasattr(m, "vq_net") and hasattr(m, "activity_head"):
+        if hasattr(m, "vq_net") and hasattr(m, "classify"):
+            return True
+
+        # 旧的 SensorLLM 风格
+        if "sensorllm" in name:
             return True
 
         if hasattr(m, "llm") and hasattr(m, "tokenizer"):
-            return True
-
-        if "sensorllm" in name:
             return True
 
         return False
@@ -894,74 +795,17 @@ class Exp_Alignment_Classification(Exp_Basic):
         return data_provider(self.args, flag)
 
     def _autofind_stage1_paths(self, setting: str):
-        """
-        自动查找 Stage1 预训练权重。
-
-        注意：
-        - setting 是当前 Stage2 的 setting，例如 xxx_test_3；
-        - 真正加载 Stage1 时，默认使用 xxx_test_0；
-        - 也可以通过 args.stage1_ckpt 直接指定权重路径；
-        - 也可以通过 args.stage1_hf_dir 直接指定 HF 目录；
-        - 也可以通过 args.pretrain_setting 指定完整 Stage1 setting。
-        """
-
-        # ------------------------------------------------------------
-        # 1. 最高优先级：用户直接指定 Stage1 wrapper 权重路径
-        # ------------------------------------------------------------
-        stage1_ckpt = str(getattr(self.args, "stage1_ckpt", "") or "").strip()
-
-        if stage1_ckpt:
-            stage1_ckpt = to_secure_path(stage1_ckpt)
-            save_root = os.path.dirname(stage1_ckpt)
-
-            if not os.path.isfile(stage1_ckpt):
-                raise FileNotFoundError(
-                    f"[Stage2] args.stage1_ckpt is set but file not found:\n"
-                    f"{stage1_ckpt}"
-                )
-
-            return save_root, stage1_ckpt, None
-
-        # ------------------------------------------------------------
-        # 2. 次优先级：用户直接指定 Stage1 HF 目录
-        # ------------------------------------------------------------
-        stage1_hf_dir = str(getattr(self.args, "stage1_hf_dir", "") or "").strip()
-
-        if stage1_hf_dir:
-            stage1_hf_dir = to_secure_path(stage1_hf_dir)
-            save_root = os.path.dirname(stage1_hf_dir)
-
-            if not os.path.isdir(stage1_hf_dir):
-                raise FileNotFoundError(
-                    f"[Stage2] args.stage1_hf_dir is set but dir not found:\n"
-                    f"{stage1_hf_dir}"
-                )
-
-            return save_root, None, stage1_hf_dir
-
-        # ------------------------------------------------------------
-        # 3. 默认：Stage2 当前 setting 可能是 test_0~test_4，
-        #    但 Stage1 默认固定加载 test_0
-        # ------------------------------------------------------------
-        stage1_setting = self._get_stage1_load_setting(setting)
-
-        save_root = os.path.join(
-            self.run_root,
-            "stage1",
-            "ckpts",
-            stage1_setting,
-        )
+        # save_root = os.path.join(getattr(self.args, "pretrain_checkpoints", "./pretrain_ckpts"), setting)
+        save_root = os.path.join(self.run_root, "stage1", "ckpts", setting)
 
         wrapper_path = os.path.join(save_root, "best_wrapper.pth")
-        hf_dir = os.path.join(save_root, "best_hf")
-
-        wrapper_path = to_secure_path(wrapper_path)
-        hf_dir = to_secure_path(hf_dir)
+        hf_dir = os.path.join(save_root, "best_hf")  # 你 save_hf_bundle(tag="best") 就是这个
 
         has_wrapper = os.path.isfile(wrapper_path)
         has_hf = os.path.isdir(hf_dir)
 
         return save_root, (wrapper_path if has_wrapper else None), (hf_dir if has_hf else None)
+
     # -------------------------
     # save/load hf
     # -------------------------
@@ -1080,258 +924,67 @@ class Exp_Alignment_Classification(Exp_Basic):
 
         m = _unwrap(self.model)
         # ============================================================
-        # Online-LLM PrimitiveAlignHAR
+        # PrimitiveAlignHAR
         # ============================================================
-        # ============================================================
-        # Online-LLM PrimitiveAlignHAR / Channel-grounded PrimitiveAlignHAR
-        # ============================================================
-        if (
-            hasattr(m, "vq_net")
-            and hasattr(m, "llm")
-            and hasattr(m, "to_llm")
-            and hasattr(m, "activity_head")
-        ):
-            # Freeze everything first
-            for p in m.parameters():
-                p.requires_grad = False
+        model_name = str(getattr(self.args, "model", "")).lower()
 
-            # VQ-VAE always frozen
+        if model_name in {
+            "primitivealignhar",
+            "primitive_align_har",
+            "primalignhar",
+            "vqprimalign",
+        }:
+            # Freeze VQ-VAE only.
             if hasattr(m, "vq_net"):
                 for p in m.vq_net.parameters():
                     p.requires_grad = False
 
-            # LLM always frozen
+            # If an LLM/text encoder is kept inside the model, freeze it.
             if hasattr(m, "llm"):
                 for p in m.llm.parameters():
                     p.requires_grad = False
 
-            stage = int(getattr(self.args, "stage", getattr(m, "stage", 1)))
+            # Train all non-frozen alignment/classification modules.
+            trainable_keywords = [
+                "vq_proj",
+                "sem_proj",
+                "mask_embed",
+                "cls_token",
+                "pos_embed",
+                "encoder",
+                "activity_head",
+                "primitive_head",
+            ]
 
-            if stage == 1:
-                # Stage1:
-                # Train primitive adapter + channel grounding + semantic alignment heads.
-                trainable_module_names = [
-                    "vq_proj",
-                    "sem_proj",
-                    "stat_proj",
-                    "channel_summary_proj",
-                    "posture_feature_proj",
-                    "posture_head",
-                    "posture_gate",
-                    "to_llm",
-                    "activity_head",
-                    "primitive_head",
-                    "semantic_recon_head",
-                    "label_align_proj",
-                ]
-
-                for name in trainable_module_names:
-                    if hasattr(m, name):
-                        for p in getattr(m, name).parameters():
-                            p.requires_grad = True
-
-                if hasattr(m, "mask_embed_llm"):
-                    m.mask_embed_llm.requires_grad_(True)
-
-                if hasattr(m, "cls_embed_llm"):
-                    m.cls_embed_llm.requires_grad_(True)
-
-                if hasattr(m, "primitive_pos_embed_llm"):
-                    m.primitive_pos_embed_llm.requires_grad_(True)
-
-                if hasattr(m, "channel_pos_embed_llm"):
-                    m.channel_pos_embed_llm.requires_grad_(True)
-
-            else:
-                stage2_trainable = str(
-                    getattr(self.args, "stage2_trainable", "adapter_all")
-                ).lower()
-
-                if stage2_trainable == "activity_only":
-                    for p in m.activity_head.parameters():
-                        p.requires_grad = True
-
-                elif stage2_trainable in ["activity_projector", "adapter_all"]:
-                    trainable_module_names = [
-                        "vq_proj",
-                        "sem_proj",
-                        "stat_proj",
-                        "channel_summary_proj",
-                        "posture_feature_proj",
-                        "posture_head",
-                        "posture_gate",
-                        "to_llm",
-                        "activity_head",
-                    ]
-
-                    if stage2_trainable == "adapter_all":
-                        trainable_module_names.extend([
-                            "primitive_head",
-                            "semantic_recon_head",
-                        ])
-
-                    for name in trainable_module_names:
-                        if hasattr(m, name):
-                            for p in getattr(m, name).parameters():
-                                p.requires_grad = True
-
-                    if hasattr(m, "cls_embed_llm"):
-                        m.cls_embed_llm.requires_grad_(True)
-
-                    if hasattr(m, "primitive_pos_embed_llm"):
-                        m.primitive_pos_embed_llm.requires_grad_(True)
-
-                    if hasattr(m, "channel_pos_embed_llm"):
-                        m.channel_pos_embed_llm.requires_grad_(True)
-
-                    if stage2_trainable == "adapter_all" and hasattr(m, "mask_embed_llm"):
-                        m.mask_embed_llm.requires_grad_(True)
-
-                else:
-                    raise ValueError(
-                        f"Unknown stage2_trainable={stage2_trainable}. "
-                        "Use activity_only / activity_projector / adapter_all."
-                    )
-
-            n_train = sum(p.numel() for p in m.parameters() if p.requires_grad)
-            n_all = sum(p.numel() for p in m.parameters())
-
-            self.log(
-                f"[trainable][ChannelGroundedPrimitiveAlignHAR] "
-                f"{n_train}/{n_all} = {100 * n_train / max(n_all, 1):.4f}%"
-            )
-
-            trainable_names = [
-                n for n, p in m.named_parameters()
-                if p.requires_grad
-            ][:160]
-
-            self.log("[trainable-names]\n" + "\n".join(trainable_names))
-
-            if n_train == 0:
-                raise RuntimeError("No trainable params for PrimitiveAlignHAR.")
-
-            return
-        # ============================================================
-        # New AlignmentModel without teacher_core
-        # ============================================================
-        if hasattr(m, "vq_net") and hasattr(m, "activity_head") and not hasattr(m, "teacher_core"):
-            # First freeze everything
-            for p in m.parameters():
-                p.requires_grad = False
-
-            # VQ-VAE always frozen
-            if hasattr(m, "vq_net"):
-                for p in m.vq_net.parameters():
+            for n, p in m.named_parameters():
+                if n.startswith("vq_net."):
                     p.requires_grad = False
+                    continue
 
-            stage = int(getattr(self.args, "stage", getattr(m, "stage", 1)))
-
-            if stage == 1:
-                # Stage1: train alignment encoder + primitive recovery + activity head
-                trainable_module_names = [
-                    "vq_proj",
-                    "sem_proj",
-                    "stat_proj",
-                    "channel_summary_proj",
-                    "posture_feature_proj",
-                    "posture_head",
-                    "posture_gate",
-                    "to_llm",
-                    "activity_head",
-                    "primitive_head",
-                    "semantic_recon_head",
-                    "label_align_proj",
-                ]
-
-                for name in trainable_module_names:
-                    if hasattr(m, name):
-                        for p in getattr(m, name).parameters():
-                            p.requires_grad = True
-
-                if hasattr(m, "mask_embed"):
-                    m.mask_embed.requires_grad_(True)
-                if hasattr(m, "cls_token"):
-                    m.cls_token.requires_grad_(True)
-                if hasattr(m, "pos_embed"):
-                    m.pos_embed.requires_grad_(True)
-
-            else:
-                stage2_trainable = str(
-                    getattr(self.args, "stage2_trainable", "activity_projector")
-                ).lower()
-
-                if stage2_trainable == "activity_only":
-                    for p in m.activity_head.parameters():
-                        p.requires_grad = True
-
-                elif stage2_trainable == "activity_projector":
-                    # 推荐默认：分类头 + 对齐投影 + encoder 都训练
-                    # 只训 activity_head 容易太弱，因为 cls_h 来自冻结 encoder
-                    trainable_module_names = [
-                        "vq_proj",
-                        "sem_proj",
-                        "encoder",
-                        "activity_head",
-                    ]
-
-                    for name in trainable_module_names:
-                        if hasattr(m, name):
-                            for p in getattr(m, name).parameters():
-                                p.requires_grad = True
-
-                    if hasattr(m, "cls_token"):
-                        m.cls_token.requires_grad_(True)
-                    if hasattr(m, "pos_embed"):
-                        m.pos_embed.requires_grad_(True)
-
-                elif stage2_trainable == "adapter_all":
-                    trainable_module_names = [
-                        "vq_proj",
-                        "sem_proj",
-                        "encoder",
-                        "activity_head",
-                        "primitive_head",
-                    ]
-
-                    for name in trainable_module_names:
-                        if hasattr(m, name):
-                            for p in getattr(m, name).parameters():
-                                p.requires_grad = True
-
-                    if hasattr(m, "mask_embed"):
-                        m.mask_embed.requires_grad_(True)
-                    if hasattr(m, "cls_token"):
-                        m.cls_token.requires_grad_(True)
-                    if hasattr(m, "pos_embed"):
-                        m.pos_embed.requires_grad_(True)
-
-                else:
-                    raise ValueError(
-                        f"Unknown stage2_trainable={stage2_trainable}. "
-                        "Use activity_only / activity_projector / adapter_all."
-                    )
+                hit = any(k in n for k in trainable_keywords)
+                p.requires_grad = bool(hit)
 
             n_train = sum(p.numel() for p in m.parameters() if p.requires_grad)
             n_all = sum(p.numel() for p in m.parameters())
 
             self.log(
-                f"[trainable][AlignmentModel] "
+                f"[PrimitiveAlignHAR][trainable] "
                 f"{n_train}/{n_all} = {100 * n_train / max(n_all, 1):.4f}%"
             )
 
             trainable_names = [
-                n for n, p in m.named_parameters()
-                if p.requires_grad
+                n for n, p in m.named_parameters() if p.requires_grad
             ][:100]
 
-            self.log("[trainable-names]\n" + "\n".join(trainable_names))
+            self.log("[PrimitiveAlignHAR][trainable-names]\n" + "\n".join(trainable_names))
 
             if n_train == 0:
-                raise RuntimeError("No trainable params for AlignmentModel.")
+                raise RuntimeError(
+                    "No trainable params for PrimitiveAlignHAR. "
+                    "Check trainable_keywords and model parameter names."
+                )
 
             return
-
         # ============================================================
         # New primitive-language teacher
         # ============================================================
@@ -1418,168 +1071,6 @@ class Exp_Alignment_Classification(Exp_Basic):
             return
 
         # ============================================================
-        # SensorLLMFullAdapter: QA JSON + placeholder replacement + LLM
-        # ============================================================
-        if (
-            hasattr(m, "llm")
-            and hasattr(m, "sensor_encoder")
-            and hasattr(m, "score")
-        ):
-            for p in m.parameters():
-                p.requires_grad = False
-
-            if hasattr(m, "llm"):
-                for p in m.llm.parameters():
-                    p.requires_grad = False
-
-            stage = int(getattr(self.args, "stage", getattr(m, "stage", 1)))
-
-            # FullAdapter uses .score as classification head.
-            # sensor_encoder is the trainable sensor-to-LLM adapter.
-            if stage == 1:
-                trainable_module_names = [
-                    "sensor_encoder",
-                    "score",
-                ]
-            else:
-                stage2_trainable = str(getattr(self.args, "stage2_trainable", "adapter_all")).lower()
-                if stage2_trainable == "activity_only":
-                    trainable_module_names = ["score"]
-                elif stage2_trainable in ["activity_projector", "adapter_all"]:
-                    trainable_module_names = ["sensor_encoder", "score"]
-                else:
-                    raise ValueError(
-                        f"Unknown stage2_trainable={stage2_trainable}. "
-                        "Use activity_only / activity_projector / adapter_all."
-                    )
-
-            for name in trainable_module_names:
-                if hasattr(m, name):
-                    for p in getattr(m, name).parameters():
-                        p.requires_grad = True
-
-            # Optional Chronos/full-SensorLLM adapters if you add them later.
-            for opt_name in ["ts_proj", "sensor_patch_proj", "channel_id", "patch_pos", "cls_embed", "mask_embed"]:
-                if hasattr(m, opt_name):
-                    obj = getattr(m, opt_name)
-                    if hasattr(obj, "parameters"):
-                        for p in obj.parameters():
-                            p.requires_grad = True
-                    elif torch.is_tensor(obj):
-                        obj.requires_grad_(True)
-
-            n_train = sum(p.numel() for p in m.parameters() if p.requires_grad)
-            n_all = sum(p.numel() for p in m.parameters())
-
-            self.log(
-                f"[trainable][SensorLLMFullAdapter] "
-                f"{n_train}/{n_all} = {100 * n_train / max(n_all, 1):.4f}%"
-            )
-
-            trainable_names = [n for n, p in m.named_parameters() if p.requires_grad][:120]
-            self.log("[trainable-names]\n" + "\n".join(trainable_names))
-
-            if n_train == 0:
-                raise RuntimeError("No trainable params for SensorLLMFullAdapter.")
-
-            return
-
-        # ============================================================
-        # SensorLLMHarAdapter
-        # ============================================================
-        if (
-            hasattr(m, "llm")
-            and hasattr(m, "sensor_encoder")
-            and hasattr(m, "to_llm")
-            and hasattr(m, "activity_head")
-        ):
-            for p in m.parameters():
-                p.requires_grad = False
-
-            # LLM frozen
-            for p in m.llm.parameters():
-                p.requires_grad = False
-
-            stage = int(getattr(self.args, "stage", getattr(m, "stage", 1)))
-
-            if stage == 1:
-                trainable_module_names = [
-                    "sensor_encoder",
-                    "to_llm",
-                    "activity_head",
-                    "channel_head",
-                ]
-
-                for name in trainable_module_names:
-                    if hasattr(m, name):
-                        for p in getattr(m, name).parameters():
-                            p.requires_grad = True
-
-                if hasattr(m, "channel_pos_embed"):
-                    m.channel_pos_embed.requires_grad_(True)
-                if hasattr(m, "cls_embed"):
-                    m.cls_embed.requires_grad_(True)
-                if hasattr(m, "mask_embed"):
-                    m.mask_embed.requires_grad_(True)
-
-            else:
-                stage2_trainable = str(
-                    getattr(self.args, "stage2_trainable", "adapter_all")
-                ).lower()
-
-                if stage2_trainable == "activity_only":
-                    for p in m.activity_head.parameters():
-                        p.requires_grad = True
-
-                elif stage2_trainable in ["activity_projector", "adapter_all"]:
-                    trainable_module_names = [
-                        "sensor_encoder",
-                        "to_llm",
-                        "activity_head",
-                    ]
-
-                    if stage2_trainable == "adapter_all":
-                        trainable_module_names.append("channel_head")
-
-                    for name in trainable_module_names:
-                        if hasattr(m, name):
-                            for p in getattr(m, name).parameters():
-                                p.requires_grad = True
-
-                    if hasattr(m, "channel_pos_embed"):
-                        m.channel_pos_embed.requires_grad_(True)
-                    if hasattr(m, "cls_embed"):
-                        m.cls_embed.requires_grad_(True)
-
-                    if stage2_trainable == "adapter_all" and hasattr(m, "mask_embed"):
-                        m.mask_embed.requires_grad_(True)
-
-                else:
-                    raise ValueError(
-                        f"Unknown stage2_trainable={stage2_trainable}. "
-                        "Use activity_only / activity_projector / adapter_all."
-                    )
-
-            n_train = sum(p.numel() for p in m.parameters() if p.requires_grad)
-            n_all = sum(p.numel() for p in m.parameters())
-
-            self.log(
-                f"[trainable][SensorLLMHarAdapter] "
-                f"{n_train}/{n_all} = {100 * n_train / max(n_all, 1):.4f}%"
-            )
-
-            trainable_names = [
-                n for n, p in m.named_parameters()
-                if p.requires_grad
-            ][:120]
-
-            self.log("[trainable-names]\n" + "\n".join(trainable_names))
-
-            if n_train == 0:
-                raise RuntimeError("No trainable params for SensorLLMHarAdapter.")
-
-            return
-        # ============================================================
         # Fallback: old two-stage model
         # ============================================================
         for p in m.parameters():
@@ -1627,76 +1118,126 @@ class Exp_Alignment_Classification(Exp_Basic):
     # -------------------------
     # forward wrappers
     # -------------------------
-    def _forward_classify(self, batch_x, padding_mask, extra=None):
-        extra = extra or {}
+    def _forward_classify(self, batch_x, padding_mask):
+        """
+        Return activity logits [B, num_class].
+
+        Important:
+            PrimitivePromptLLM:
+                inference-only, can use classify()
+
+            PrimitiveAlignHAR:
+                trainable model.
+                During training, do NOT call classify() if classify has @torch.no_grad().
+                Use forward(..., mode="classify") instead.
+        """
+        m = _unwrap(self.model)
+        model_name = str(getattr(self.args, "model", "")).lower()
+
+        # ============================================================
+        # PrimitiveAlignHAR: trainable primitive-language alignment model
+        # ============================================================
+        if model_name in {
+            "primitivealignhar",
+            "primitive_align_har",
+            "primalignhar",
+            "vqprimalign",
+        }:
+            if self.model.training:
+                out = self.model(
+                    batch_x,
+                    padding_mask,
+                    mode="classify",
+                )
+
+                if isinstance(out, (tuple, list)):
+                    out = out[0]
+
+                if out.dim() != 2:
+                    raise RuntimeError(
+                        f"PrimitiveAlignHAR classify output must be [B,num_class], got {tuple(out.shape)}"
+                    )
+
+                if not out.requires_grad:
+                    raise RuntimeError(
+                        "PrimitiveAlignHAR output does not require grad during training. "
+                        "Check forward() and trainable parameters."
+                    )
+
+                return out
+
+            else:
+                if hasattr(m, "classify"):
+                    logits, probs = m.classify(batch_x, padding_mask=padding_mask)
+                else:
+                    logits = self.model(batch_x, padding_mask, mode="classify")
+
+                if logits.dim() != 2:
+                    raise RuntimeError(
+                        f"PrimitiveAlignHAR eval logits must be [B,num_class], got {tuple(logits.shape)}"
+                    )
+
+                return logits
+
+        # ============================================================
+        # Other models: original behavior
+        # ============================================================
+        if hasattr(m, "classify"):
+            logits, probs = m.classify(batch_x, padding_mask=padding_mask)
+
+            if logits is None:
+                raise RuntimeError(
+                    "model.classify() returned None logits. "
+                    "Please check whether teacher_core.activity_head is enabled."
+                )
+
+            if logits.dim() != 2:
+                raise RuntimeError(f"classify logits must be [B,num_class], got {tuple(logits.shape)}")
+
+            if self.model.training and not logits.requires_grad:
+                raise RuntimeError(
+                    "classify logits does not require grad during training. "
+                    "This usually means classify() contains @torch.no_grad(), "
+                    "with torch.no_grad(), logits.detach(), or trainable modules "
+                    "are not used in the classify forward path."
+                )
+
+            return logits
 
         if self._is_two_stage_model():
-            out = self.model(
-                batch_x,
-                padding_mask=padding_mask,
-                mode="classify",
-                labels=None,
-                input_ids=extra.get("input_ids", None),
-                attention_mask=extra.get("attention_mask", None),
-                mts_token_ids=extra.get("mts_token_ids", None),
-                mts_attention_mask=extra.get("mts_attention_mask", None),
-                mts_tokenizer_state=extra.get("mts_tokenizer_state", None),
-                ts_token_ids=extra.get("ts_token_ids", None),
-                ts_attention_mask=extra.get("ts_attention_mask", None),
-                ts_tokenizer_state=extra.get("ts_tokenizer_state", None),
-            )
+            out = self.model(batch_x, padding_mask, mode="classify")
         else:
-            try:
-                out = self.model(batch_x, padding_mask=padding_mask)
-            except TypeError:
-                out = self.model(batch_x, padding_mask, None, None)
+            out = self.model(batch_x, padding_mask, None, None)
 
         if isinstance(out, (tuple, list)):
-            if len(out) >= 2 and torch.is_tensor(out[1]) and out[1].dim() == 2:
-                out = out[1]
-            else:
-                out = out[0]
-
-        if not torch.is_tensor(out):
-            raise RuntimeError(f"classify forward must return tensor logits, got {type(out)}")
+            out = out[0]
 
         if out.dim() != 2:
             raise RuntimeError(f"classify output must be [B,num_class], got {tuple(out.shape)}")
 
         if self.model.training and not out.requires_grad:
-            trainable = [n for n, p in self.model.named_parameters() if p.requires_grad]
             raise RuntimeError(
-                "classification logits do not require grad during training. "
-                f"num_trainable={len(trainable)}, first_trainable={trainable[:30]}"
+                "classify output does not require grad during training."
             )
 
         return out
-    def _forward_pretrain_loss(self, batch_x, padding_mask, labels=None, extra=None):
+    def _forward_pretrain_loss(self, batch_x, padding_mask, labels=None):
         """
-        Stage1 teacher/alignment forward.
+        Stage1 teacher alignment.
 
-        Supports both:
-          - PrimitiveAlignHAR: batch_x + padding_mask + labels
-          - SensorLLMFullAdapter: batch_x + labels + input_ids/attention_mask from QA JSON
+        New objective:
+            loss = loss_primitive + lambda_activity * loss_activity
+
+        Therefore labels should be passed whenever available.
         """
         if not self._is_two_stage_model():
             raise RuntimeError("This model does not support pretrain/alignment stage.")
 
-        extra = extra or {}
-
         out = self.model(
             batch_x,
-            padding_mask=padding_mask,
+            padding_mask,
             mode="train",
             labels=labels,
-            input_ids=extra.get("input_ids", None),
-            attention_mask=extra.get("attention_mask", None),
-            mts_token_ids=extra.get("mts_token_ids", None),
-            mts_attention_mask=extra.get("mts_attention_mask", None),
-            mts_tokenizer_state=extra.get("mts_tokenizer_state", None),
-            ts_token_ids=extra.get("ts_token_ids", None),
-            ts_attention_mask=extra.get("ts_attention_mask", None),
-            ts_tokenizer_state=extra.get("ts_tokenizer_state", None),
         )
 
         if not isinstance(out, (tuple, list)) or len(out) < 1:
@@ -1738,6 +1279,7 @@ class Exp_Alignment_Classification(Exp_Basic):
         w = 1.0 / counts.float().clamp_min(1.0)
         w = w / w.mean()
         return w
+
     # -------------------------
     # optimizer / criterion
     # -------------------------
@@ -1861,18 +1403,15 @@ class Exp_Alignment_Classification(Exp_Basic):
         mask_ratios = []
 
         with torch.no_grad():
-            for batch in loader:
-                batch_x, label, padding_mask, extra = self._unpack_batch(batch)
+            for batch_x, label, padding_mask in loader:
                 batch_x = batch_x.float().to(self.device)
                 label = label.to(self.device).long()
                 padding_mask = self._to_bool_mask(padding_mask)
-                extra = self._move_extra_to_device(extra)
 
                 out = self._forward_pretrain_loss(
                     batch_x,
                     padding_mask,
                     labels=label,
-                    extra=extra,
                 )
 
                 loss = out[0]
@@ -2182,10 +1721,12 @@ class Exp_Alignment_Classification(Exp_Basic):
     # Stage2: classify
     # ============================================================
     def vali_classify(self, loader, criterion, save_dir=None):
+
         total_loss, preds, trues = [], [], []
         prompt_infos = []
 
         self.model.eval()
+
         n_samples_total = 0
 
         if self.device.type == "cuda":
@@ -2194,18 +1735,15 @@ class Exp_Alignment_Classification(Exp_Basic):
         infer_start = time.time()
 
         with torch.no_grad():
-            for batch in loader:
+            for batch_x, label, padding_mask in loader:
                 if int(getattr(self.args, "prompt_eval_max_cases", -1)) > 0:
                     if n_samples_total >= int(getattr(self.args, "prompt_eval_max_cases")):
                         break
-
-                batch_x, label, padding_mask, extra = self._unpack_batch(batch)
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = self._to_bool_mask(padding_mask)
                 label = label.to(self.device).long().view(-1)
-                extra = self._move_extra_to_device(extra)
 
-                outputs = self._forward_classify(batch_x, padding_mask, extra=extra)
+                outputs = self._forward_classify(batch_x, padding_mask)
 
                 m = _unwrap(self.model)
                 if hasattr(m, "last_prompt_info") and m.last_prompt_info is not None:
@@ -2223,6 +1761,7 @@ class Exp_Alignment_Classification(Exp_Basic):
             torch.cuda.synchronize()
 
         total_time = time.time() - infer_start
+
         ms_per_sample = (total_time / max(n_samples_total, 1)) * 1000.0
         samples_per_sec = (n_samples_total / max(total_time, 1e-9))
 
@@ -2233,42 +1772,14 @@ class Exp_Alignment_Classification(Exp_Basic):
         )
 
         total_loss = float(np.mean(total_loss)) if len(total_loss) else 0.0
-
-        if len(preds) == 0:
-            metrics = {
-                "acc": 0.0,
-                "precision_macro": 0.0,
-                "recall_macro": 0.0,
-                "f1_macro": 0.0,
-                "f1_micro": 0.0,
-                "infer_total_time_s": float(total_time),
-                "infer_ms_per_sample": float(ms_per_sample),
-                "infer_samples_per_sec": float(samples_per_sec),
-                "infer_total_samples": int(n_samples_total),
-            }
-            self.model.train()
-            return total_loss, metrics
-
         preds = torch.cat(preds, 0)
         trues = torch.cat(trues, 0).flatten()
 
         logits_np = preds.detach().cpu().numpy()
         trues_np = trues.detach().cpu().numpy()
         trues_np = np.squeeze(trues_np)
+
         predictions = np.argmax(logits_np, axis=1)
-
-        from sklearn.metrics import classification_report
-        from collections import Counter
-
-        self.log("[EvalDebug] true_count=" + str(dict(Counter(trues_np.tolist()))))
-        self.log("[EvalDebug] pred_count=" + str(dict(Counter(predictions.tolist()))))
-        self.log("[EvalDebug] classification_report:\n" + classification_report(
-            trues_np,
-            predictions,
-            digits=4,
-            zero_division=0,
-        ))
-        self.log("[EvalDebug] confusion_matrix:\n" + str(confusion_matrix(trues_np, predictions)))
 
         x = logits_np - np.max(logits_np, axis=1, keepdims=True)
         exp_x = np.exp(x)
@@ -2305,37 +1816,37 @@ class Exp_Alignment_Classification(Exp_Basic):
                 with open(os.path.join(save_dir, "prompt_llm_cases.json"), "w", encoding="utf-8") as f:
                     json.dump(prompt_infos, f, ensure_ascii=False, indent=2)
 
-            # Save a few QA prompt examples for SensorLLM-style datasets.
-            if bool(getattr(self.args, "save_eval_text_examples", True)):
-                try:
-                    examples = []
-                    max_cases = int(getattr(self.args, "save_eval_text_examples_num", 20))
-                    for batch in loader:
-                        _, _, _, extra = self._unpack_batch(batch)
-                        texts = extra.get("input_texts", None)
-                        answers = extra.get("answer", None)
-                        if texts is None:
-                            break
-                        for i, t in enumerate(texts):
-                            examples.append({
-                                "input_text": str(t),
-                                "answer": str(answers[i]) if isinstance(answers, (list, tuple)) and i < len(answers) else "",
-                            })
-                            if len(examples) >= max_cases:
-                                break
-                        if len(examples) >= max_cases:
-                            break
-                    if len(examples) > 0:
-                        with open(os.path.join(save_dir, "qa_prompt_examples.json"), "w", encoding="utf-8") as f:
-                            json.dump(examples, f, ensure_ascii=False, indent=2)
-                except Exception as e:
-                    self.log(f"[warn] failed to save qa prompt examples: {e}")
-
         self.model.train()
-        return total_loss, metrics
 
+        return total_loss, metrics
     def train(self, setting):
+
+        # stage2 load stage1 automatically
+        save_root, wrapper_path, hf_dir = self._autofind_stage1_paths(setting)
+
+
+
+        if wrapper_path is not None:
+            self.log(f"[auto-load] stage1 wrapper: {wrapper_path}")
+            m = _unwrap(self.model)
+            if hasattr(m, "stage"):
+                m.stage = 2
+            if hasattr(m, "load_wrapper"):
+                m.load_wrapper(wrapper_path, map_location=self.device)
+            else:
+                sd = torch.load(wrapper_path, map_location=self.device)
+                m.load_state_dict(sd, strict=False)
+
+        elif hf_dir is not None:
+            self.log(f"[auto-load] stage1 hf: {hf_dir}")
+            self._maybe_load_stage1_hf(hf_dir)  # 你已有的函数会用 save_root
+        else:
+            self.log(f"[auto-load][warn] no stage1 found under: {save_root}")
+
         self.args.stage = 2
+        m = _unwrap(self.model)
+        if hasattr(m, "stage"):
+            m.stage = 2
 
         _, train_loader = self._get_data(flag="TRAIN")
         _, val_loader = self._get_data(flag="TEST")
@@ -2343,91 +1854,32 @@ class Exp_Alignment_Classification(Exp_Basic):
 
         paths = self._paths_for_setting(setting)
 
-        # Stage2 logger 每个 setting 一个文件
-        # 注意：logger 要放到 auto-load 前面，否则 auto-load 信息不会写入日志
+        # stage2 logger 每 setting 一个文件（推荐）
         self.logger = TeeLogger(paths["stage2_log"])
 
+        # stage2 ckpt_dir
         path = paths["stage2_ckpt_dir"]
         path = to_secure_path(path)
+
         os.makedirs(path, exist_ok=True)
 
+        # stage2 meta
         self._dump_meta(paths["meta_stage2"], stage="stage2", setting=setting, paths=paths)
 
-        self.log(f"[Stage2-Train] setting={setting}")
-
-        # ============================================================
-        # Stage2 load Stage1 automatically
-        # ============================================================
-        stage1_load_setting = self._get_stage1_load_setting(setting)
-
-        self.log(f"[Stage2] current finetune setting: {setting}")
-        self.log(f"[Stage2] stage1 load setting     : {stage1_load_setting}")
-
-        save_root, wrapper_path, hf_dir = self._autofind_stage1_paths(setting)
-
-        if wrapper_path is not None:
-            self.log(f"[auto-load] stage1 wrapper: {wrapper_path}")
-
-            m = _unwrap(self.model)
-
-            if hasattr(m, "stage"):
-                m.stage = 2
-
-            if hasattr(m, "load_wrapper"):
-                m.load_wrapper(wrapper_path, map_location=self.device)
-            else:
-                sd = torch.load(wrapper_path, map_location=self.device)
-                m.load_state_dict(sd, strict=False)
-
-            self.log("[auto-load] stage1 wrapper loaded successfully.")
-
-        elif hf_dir is not None:
-            self.log(f"[auto-load] stage1 hf: {hf_dir}")
-            self._maybe_load_stage1_hf(hf_dir)
-            self.log("[auto-load] stage1 hf loaded successfully.")
-
-        else:
-            raise FileNotFoundError(
-                f"\n[Stage2] No Stage1 pretrained checkpoint found.\n"
-                f"Current Stage2 setting : {setting}\n"
-                f"Expected Stage1 setting: {stage1_load_setting}\n"
-                f"Searched under         : {save_root}\n\n"
-                f"Solutions:\n"
-                f"1) Run Stage1 first with --stage 1 --itr 1;\n"
-                f"2) Or set --pretrain_ii 0;\n"
-                f"3) Or pass --stage1_ckpt /path/to/best_wrapper.pth.\n"
-            )
-
-        m = _unwrap(self.model)
-        if hasattr(m, "stage"):
-            m.stage = 2
-
-        if bool(getattr(self.args, "freeze_llm", True)):
-            self.set_trainable_modules()
-
-        path = paths["stage2_ckpt_dir"]
-        path = to_secure_path(path)
-        os.makedirs(path, exist_ok=True)
-
-        self._dump_meta(paths["meta_stage2"], stage="stage2", setting=setting, paths=paths)
         self.log(f"[Stage2-Train] setting={setting}")
 
         if bool(getattr(self.args, "freeze_llm", True)):
             self.set_trainable_modules()
 
-        self.log(
-            f"[HP] lr={float(self.args.learning_rate):.2e} "
-            f"wd={float(self.args.weight_decay):.2e} "
-            f"min_lr={float(self.args.min_lr):.2e} "
-            f"warmup_epochs={int(self.args.warmup_epochs)} "
-            f"cosine_by_iter={bool(self.args.cosine_by_iter)} "
-            f"monitor={str(getattr(self.args, 'monitor', 'acc'))}"
-        )
+        # ---- diagnostics ----
+        self.log(f"[HP] lr={float(self.args.learning_rate):.2e} wd={float(self.args.weight_decay):.2e} min_lr={float(self.args.min_lr):.2e} warmup_epochs={int(self.args.warmup_epochs)} cosine_by_iter={bool(self.args.cosine_by_iter)} monitor={str(getattr(self.args,'monitor','acc'))}")
 
         opt = self._select_optimizer()
         scheduler = self._build_scheduler(opt, steps_per_epoch=len(train_loader))
+
         criterion = self._select_criterion(train_loader=train_loader)
 
+        # early stop: default monitor acc (same as V1)
         monitor = str(getattr(self.args, "monitor", "acc")).lower()
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
@@ -2441,34 +1893,20 @@ class Exp_Alignment_Classification(Exp_Basic):
             epoch_time = time.time()
             train_loss = []
 
-            for i, batch in enumerate(train_loader):
+            for i, (batch_x, label, padding_mask) in enumerate(train_loader):
                 opt.zero_grad()
-
-                batch_x, label, padding_mask, extra = self._unpack_batch(batch)
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = self._to_bool_mask(padding_mask)
                 label = label.to(self.device)
-                extra = self._move_extra_to_device(extra)
 
-                outputs = self._forward_classify(batch_x, padding_mask, extra=extra)
+                outputs = self._forward_classify(batch_x, padding_mask)
+                # print("outputs:", outputs.shape, "label:", label.shape)
                 target = label.long().view(-1)
+                # label_test= label.long().squeeze(-1)
+                # print("target:", target.shape)
+                # print("label_test:", label_test.shape)
+                # print(i)
                 loss = criterion(outputs, target)
-
-                if not loss.requires_grad:
-                    trainable = [name for name, p in self.model.named_parameters() if p.requires_grad]
-                    self.log(
-                        "[Stage2][error] loss does not require grad.\n"
-                        f"loss={loss}\n"
-                        f"loss.grad_fn={loss.grad_fn}\n"
-                        f"outputs.requires_grad={outputs.requires_grad}\n"
-                        f"outputs.grad_fn={outputs.grad_fn}\n"
-                        f"num_trainable={len(trainable)}\n"
-                        f"first_trainable={trainable[:50]}"
-                    )
-                    raise RuntimeError(
-                        "Stage2 classification loss has no grad. "
-                        "Check forward(mode='classify'), trainable modules, no_grad, detach."
-                    )
 
                 train_loss.append(float(loss.item()))
 
@@ -2476,19 +1914,20 @@ class Exp_Alignment_Classification(Exp_Basic):
                 nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
                 opt.step()
 
+                # iter-step scheduler
                 if scheduler is not None and bool(getattr(self.args, "cosine_by_iter", False)):
                     scheduler.step()
 
                 if (i + 1) % 100 == 0:
                     speed = (time.time() - time_now) / 100
                     left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
-                    self.log(
-                        f"\titers:{i + 1}, epoch:{epoch + 1} | loss:{loss.item():.6f} | "
-                        f"speed:{speed:.4f}s/iter | left:{left_time:.1f}s"
-                    )
+                    self.log(f"\titers:{i + 1}, epoch:{epoch + 1} | loss:{loss.item():.6f} | "
+                             f"speed:{speed:.4f}s/iter | left:{left_time:.1f}s")
+                    # lr snapshot
                     self._log_lrs(opt, "[LR] iter")
                     time_now = time.time()
 
+            # epoch-step scheduler
             if scheduler is not None and not bool(getattr(self.args, "cosine_by_iter", False)):
                 if isinstance(scheduler, dict):
                     if epoch < int(getattr(self.args, "warmup_epochs", 0)):
@@ -2499,25 +1938,47 @@ class Exp_Alignment_Classification(Exp_Basic):
                     scheduler.step()
 
             train_loss = float(np.mean(train_loss)) if len(train_loss) else 0.0
+            # val_loss, val_acc = self.vali_classify(val_loader, criterion)
+            # test_loss, test_acc = self.vali_classify(test_loader, criterion)
+            #
+            # self._log_lrs(opt, f"[LR] epoch={epoch+1}")
 
             val_loss, val_m = self.vali_classify(val_loader, criterion)
             test_loss, test_m = self.vali_classify(test_loader, criterion)
 
-            self._log_lrs(opt, f"[LR] epoch={epoch + 1}")
+            self._log_lrs(opt, f"[LR] epoch={epoch+1}")
 
             self.log(
                 f"[Stage2-Classify] Epoch:{epoch + 1} | Train:{train_loss:.4f} | "
-                f"Val:{val_loss:.4f} acc:{val_m['acc']:.4f} f1m:{val_m['f1_macro']:.4f} "
-                f"recm:{val_m['recall_macro']:.4f} prem:{val_m['precision_macro']:.4f} | "
+                f"Val:{val_loss:.4f} acc:{val_m['acc']:.4f} f1m:{val_m['f1_macro']:.4f} recm:{val_m['recall_macro']:.4f} prem:{val_m['precision_macro']:.4f} | "
                 f"Test:{test_loss:.4f} acc:{test_m['acc']:.4f} f1m:{test_m['f1_macro']:.4f} | "
                 f"time:{time.time() - epoch_time:.1f}s"
             )
 
+            #
+            # # 默认训练中不评估 test（科研规范）
+            # if bool(getattr(self.args, "eval_test_during_train", False)):
+            #     test_loss, test_acc = self.vali_classify(test_loader, criterion)
+            #     test_msg = f" | Test:{test_loss:.4f} Acc:{test_acc:.4f}"
+            # else:
+            #     test_msg = ""
+            #
+            # self.log(
+            #     f"[Stage2-Classify] Epoch:{epoch + 1} | Train:{train_loss:.4f} | "
+            #     f"Val:{val_loss:.4f} Acc:{val_acc:.4f}{test_msg} | "
+            #     f"time:{time.time() - epoch_time:.1f}s"
+            # )
+            #
+            # # self.log(f"[Stage2-Classify] Epoch:{epoch + 1} | Train:{train_loss:.4f} | "
+            # #          f"Val:{val_loss:.4f} Acc:{val_acc:.4f} | Test:{test_loss:.4f} Acc:{test_acc:.4f} | "
+            # #          f"time:{time.time() - epoch_time:.1f}s")
+
+            # early stopping
             if monitor == "loss":
                 early_stopping(val_loss, self.model, path)
             else:
                 early_stopping(-val_m["acc"], self.model, path)
-
+            # ---- write stage2 status (best snapshot if updated) ----
             status_path = os.path.join(paths["meta_dir"], "status_stage2.json")
             status_path = to_secure_path(status_path)
 
@@ -2529,11 +1990,6 @@ class Exp_Alignment_Classification(Exp_Basic):
                     "val_loss": float(val_loss),
                     "test_acc": float(test_m["acc"]),
                     "test_loss": float(test_loss),
-
-                    "stage1_load_setting": str(stage1_load_setting),
-                    "stage1_wrapper_path": str(wrapper_path) if wrapper_path is not None else None,
-                    "stage1_hf_dir": str(hf_dir) if hf_dir is not None else None,
-
                     "artifact_path": paths["stage2_ckpt"],
                     "artifact_exists": os.path.exists(paths["stage2_ckpt"]),
                     "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -2543,10 +1999,16 @@ class Exp_Alignment_Classification(Exp_Basic):
                 self.log("Early stopping")
                 break
 
+        # best_model_path = os.path.join(path, "checkpoint.pth")
+        # if os.path.exists(best_model_path):
+        #     self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
         best_model_path = os.path.join(path, "checkpoint.pth")
         if os.path.exists(best_model_path):
             self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
 
+        # # 最终只评估一次 test（用 val-best）
+        # final_test_loss, final_test_acc = self.vali_classify(test_loader, criterion)
+        # self.log(f"[Stage2-FinalTest] loss:{final_test_loss:.6f} acc:{final_test_acc:.6f}")
         return self.model
 
     def test_classify(self, setting, test=0):
@@ -2874,6 +2336,6 @@ if __name__ == '__main__':
         configs.distil,
         configs.des)
 
-    exp = Exp_Alignment_Classification(configs)
+    exp = Exp_Alignment_LLM(configs)
     exp.pretrain(setting)
     c = 'end'

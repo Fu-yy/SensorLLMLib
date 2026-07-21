@@ -134,11 +134,19 @@ class StrongStudent(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=dim_model,
             nhead=nhead,
-            dim_feedforward=dim_model * 4,
+            dim_feedforward=dim_model,
             dropout=dropout,
             batch_first=True,
             norm_first=True,
         )
+        # encoder_layer = nn.TransformerEncoderLayer(
+        #     d_model=dim_model,
+        #     nhead=nhead,
+        #     dim_feedforward=dim_model * 4,
+        #     dropout=dropout,
+        #     batch_first=True,
+        #     norm_first=True,
+        # )
 
         self.transformer = nn.TransformerEncoder(
             encoder_layer,
